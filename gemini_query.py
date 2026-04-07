@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
+import tenacity
 
 # Load environment variables
 load_dotenv()
@@ -14,6 +15,10 @@ NTFY_TOPIC = os.environ.get("NTFY_TOPIC")
 
 if not GEMINI_API_KEY or not NTFY_TOPIC:
     print("Error: GEMINI_API_KEY and NTFY_TOPIC must be set in the .env file.")
+    exit(1)
+
+if GEMINI_API_KEY == "your_gemini_api_key_here":
+    print("Error: You are still using the default placeholder for GEMINI_API_KEY. Please edit the .env file and add your real key.")
     exit(1)
 
 # Initialize Gemini Client
@@ -36,8 +41,8 @@ def read_prompts(filename="prompts.txt"):
 @retry(
     wait=wait_exponential(multiplier=1, min=4, max=60),
     stop=stop_after_attempt(5),
-    # You might want to refine this to only retry on specific exceptions like rate limits
-    # retry=retry_if_exception_type(genai.errors.APIError) # Adjust based on actual error types
+    # Only retry if it is NOT a client error (e.g., don't retry 400 or 403 errors)
+    retry=tenacity.retry_if_not_exception_type(genai.errors.ClientError)
 )
 def query_gemini(prompts):
     """Queries Gemini using Google Search grounding and returns a JSON list."""
@@ -120,6 +125,8 @@ def main():
         else:
             print("No conditions were met. No notification sent.")
 
+    except tenacity.RetryError as e:
+        print(f"An error occurred during processing: {e.last_attempt.exception()}")
     except Exception as e:
          print(f"An error occurred during processing: {e}")
 
