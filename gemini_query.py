@@ -1,6 +1,7 @@
 import os
 import json
 import requests
+import time
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
@@ -44,9 +45,8 @@ def read_prompts(filename="prompts.txt"):
     # Only retry if it is NOT a client error (e.g., don't retry 400 or 403 errors)
     retry=tenacity.retry_if_not_exception_type(genai.errors.ClientError)
 )
-def query_gemini(prompts):
-    """Queries Gemini using Google Search grounding and returns a JSON list."""
-
+def query_gemini_batch(batch_prompts):
+    """Queries Gemini using Google Search grounding for a batch of prompts and returns a JSON list."""
     system_instruction = (
         "You are an assistant that evaluates a list of conditional queries based on CURRENT, REAL-TIME information. "
         "You MUST use the Google Search tool to check the current status of each query. "
@@ -58,10 +58,9 @@ def query_gemini(prompts):
     )
 
     combined_prompt = "Please evaluate the following conditions:\n\n"
-    for i, prompt in enumerate(prompts):
+    for i, prompt in enumerate(batch_prompts):
         combined_prompt += f"{i+1}. {prompt}\n"
 
-    print("Querying Gemini...")
     response = client.models.generate_content(
         model='gemini-2.5-flash',
         contents=combined_prompt,
@@ -74,6 +73,54 @@ def query_gemini(prompts):
     )
 
     return response.text
+
+def process_prompts_in_batches(prompts, batch_size=10):
+    """Processes prompts in batches to avoid giant requests while minimizing API calls."""
+    all_alerts = []
+
+    # Split prompts into chunks of batch_size
+    batches = [prompts[i:i + batch_size] for i in range(0, len(prompts), batch_size)]
+
+    for i, batch in enumerate(batches):
+        print(f"Querying Gemini (Batch {i+1}/{len(batches)})...")
+        try:
+            response_text = query_gemini_batch(batch)
+            print(f"Raw Gemini response for batch {i+1}:\n{response_text}")
+
+            # Parse the JSON response
+            try:
+                batch_alerts = json.loads(response_text)
+            except json.JSONDecodeError as e:
+                print(f"Failed to parse Gemini response as JSON: {e}")
+                print("Trying to clean up markdown if present...")
+                # Fallback if Gemini accidentally includes markdown despite instructions
+                cleaned_text = response_text.strip()
+                if cleaned_text.startswith("```json"):
+                    cleaned_text = cleaned_text[7:]
+                if cleaned_text.endswith("```"):
+                    cleaned_text = cleaned_text[:-3]
+                try:
+                    batch_alerts = json.loads(cleaned_text.strip())
+                except json.JSONDecodeError:
+                     print("Could not recover JSON for this batch. Skipping.")
+                     batch_alerts = []
+
+            if isinstance(batch_alerts, list):
+                all_alerts.extend(batch_alerts)
+            else:
+                print("Error: Expected Gemini to return a JSON list for this batch.")
+
+        except tenacity.RetryError as e:
+            print(f"Error evaluating batch {i+1}: {e.last_attempt.exception()}")
+        except Exception as e:
+            print(f"Unexpected error evaluating batch {i+1}: {e}")
+
+        # Add a delay between batches to avoid rate limits (except after the last batch)
+        if i < len(batches) - 1:
+            print("Waiting 5 seconds before next batch to prevent rate limits...")
+            time.sleep(5)
+
+    return all_alerts
 
 def send_ntfy_notification(message):
     """Sends a notification to the configured ntfy topic."""
@@ -93,30 +140,7 @@ def main():
         return
 
     try:
-        response_text = query_gemini(prompts)
-        print(f"Raw Gemini response:\n{response_text}")
-
-        # Parse the JSON response
-        try:
-            alerts = json.loads(response_text)
-        except json.JSONDecodeError as e:
-            print(f"Failed to parse Gemini response as JSON: {e}")
-            print("Trying to clean up markdown if present...")
-            # Fallback if Gemini accidentally includes markdown despite instructions
-            cleaned_text = response_text.strip()
-            if cleaned_text.startswith("```json"):
-                cleaned_text = cleaned_text[7:]
-            if cleaned_text.endswith("```"):
-                cleaned_text = cleaned_text[:-3]
-            try:
-                alerts = json.loads(cleaned_text.strip())
-            except json.JSONDecodeError:
-                 print("Could not recover JSON. Exiting.")
-                 return
-
-        if not isinstance(alerts, list):
-            print("Error: Expected Gemini to return a JSON list.")
-            return
+        alerts = process_prompts_in_batches(prompts, batch_size=10)
 
         if alerts:
             # Join the alerts with a newline or custom separator
