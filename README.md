@@ -53,16 +53,9 @@ Is the S&P 500 currently trading above 6000?
 
 ### 5. Update `run.sh` (Optional)
 
-If you are using a Python virtual environment, you'll need to uncomment the line in `run.sh` to activate it before the script runs.
+The `run.sh` script assumes your virtual environment is named `venv` and is located in the same directory. If you named your virtual environment something else, edit `run.sh` to update the path.
 
-```bash
-# Edit run.sh
-nano run.sh
-
-# Uncomment this line:
-source venv/bin/activate
-```
-Also, ensure the branch name in `git pull origin main` matches your repository's default branch.
+Also, ensure the branch name in `git pull origin main` in `run.sh` matches your repository's default branch.
 
 ### 6. Set Up the Cron Job
 
