@@ -55,7 +55,7 @@ Is the S&P 500 currently trading above 6000?
 
 The `run.sh` script assumes your virtual environment is named `venv` and is located in the same directory. If you named your virtual environment something else, edit `run.sh` to update the path.
 
-Also, ensure the branch name in `git pull origin main` in `run.sh` matches your repository's default branch.
+The script is smart enough to automatically detect which branch you are on and pull the latest changes for that branch.
 
 ### 6. Testing the Setup
 

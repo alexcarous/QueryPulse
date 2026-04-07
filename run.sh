@@ -5,7 +5,8 @@ cd "$(dirname "$0")" || exit
 
 # Pull the latest changes from the git repository
 echo "Pulling latest changes from GitHub..."
-git pull origin main # Change 'main' to your branch name if different
+# Automatically pull the current branch
+git pull origin $(git branch --show-current)
 
 # Activate the virtual environment
 echo "Activating virtual environment..."
