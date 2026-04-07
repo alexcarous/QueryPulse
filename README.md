@@ -57,7 +57,22 @@ The `run.sh` script assumes your virtual environment is named `venv` and is loca
 
 Also, ensure the branch name in `git pull origin main` in `run.sh` matches your repository's default branch.
 
-### 6. Set Up the Cron Job
+### 6. Testing the Setup
+
+Before setting up the cron job, it's highly recommended to test the script manually to ensure everything is configured correctly (API keys, ntfy topic, virtual environment).
+
+1. Make sure you are in the repository directory.
+2. Add a prompt to `prompts.txt` that is **guaranteed to be true** so you can confirm the notification system works. For example:
+   ```text
+   Is the sky generally considered blue?
+   ```
+3. Run the wrapper script manually:
+   ```bash
+   ./run.sh
+   ```
+4. Watch the terminal output. It should pull from git, activate the environment, query Gemini, and then output `Notification sent successfully.`. Check your phone/browser ntfy subscription to see the alert!
+
+### 7. Set Up the Cron Job
 
 To run the script weekly (e.g., every Monday at 9:00 AM), set up a cron job.
 
