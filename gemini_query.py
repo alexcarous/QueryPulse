@@ -17,9 +17,8 @@ if not GEMINI_API_KEY or not NTFY_TOPIC:
     exit(1)
 
 # Initialize Gemini Client
-# The client automatically picks up the GEMINI_API_KEY environment variable.
 try:
-    client = genai.Client()
+    client = genai.Client(api_key=GEMINI_API_KEY)
 except Exception as e:
     print(f"Error initializing Gemini client: {e}")
     exit(1)
