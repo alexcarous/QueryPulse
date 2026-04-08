@@ -1,6 +1,8 @@
 import os
 import json
 import requests
+import time
+import re
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
@@ -11,14 +13,23 @@ import tenacity
 load_dotenv()
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+HEALTHCHECK_URL = os.environ.get("HEALTHCHECK_URL")
 
-if not GEMINI_API_KEY or not NTFY_TOPIC:
-    print("Error: GEMINI_API_KEY and NTFY_TOPIC must be set in the .env file.")
+if not GEMINI_API_KEY or not TAVILY_API_KEY:
+    print("Error: GEMINI_API_KEY and TAVILY_API_KEY must be set in the .env file.")
     exit(1)
 
-if GEMINI_API_KEY == "your_gemini_api_key_here":
-    print("Error: You are still using the default placeholder for GEMINI_API_KEY. Please edit the .env file and add your real key.")
+if not NTFY_TOPIC and not (TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID):
+    print("Error: You must configure at least one notification channel (NTFY_TOPIC or Telegram credentials).")
+    exit(1)
+
+if GEMINI_API_KEY == "your_gemini_api_key_here" or TAVILY_API_KEY == "your_tavily_api_key_here":
+    print("Error: You are still using default placeholders for your API keys. Please edit the .env file and add your real keys.")
     exit(1)
 
 # Initialize Gemini Client
@@ -27,6 +38,23 @@ try:
 except Exception as e:
     print(f"Error initializing Gemini client: {e}")
     exit(1)
+
+def extract_urls(text):
+    """Extracts URLs from a string using regex."""
+    url_pattern = re.compile(r'https?://[^\s]+')
+    return url_pattern.findall(text)
+
+def fetch_jina_reader(url):
+    """Uses Jina Reader API to fetch raw text from a specific URL."""
+    print(f"    -> Using Jina Reader for URL: {url}")
+    jina_url = f"https://r.jina.ai/{url}"
+    try:
+        response = requests.get(jina_url, timeout=15)
+        response.raise_for_status()
+        return response.text[:3000] # Cap context size to prevent massive prompts
+    except requests.exceptions.RequestException as e:
+        print(f"    -> Warning: Jina Reader failed for '{url}': {e}")
+        return None
 
 def read_prompts(filename="prompts.txt"):
     """Reads prompts from the specified file, ignoring empty lines."""
@@ -38,36 +66,57 @@ def read_prompts(filename="prompts.txt"):
         print(f"Error: {filename} not found.")
         exit(1)
 
+def search_tavily(query):
+    """Queries the Tavily API to get search context for a prompt."""
+    url = "https://api.tavily.com/search"
+    payload = {
+        "api_key": TAVILY_API_KEY,
+        "query": query,
+        "search_depth": "basic",
+        "include_answer": False,
+        "include_images": False,
+        "include_raw_content": False,
+        "max_results": 3
+    }
+
+    try:
+        response = requests.post(url, json=payload, timeout=15)
+        response.raise_for_status()
+        data = response.json()
+
+        # Combine snippets from the results
+        snippets = []
+        for result in data.get("results", []):
+            snippets.append(result.get("content", ""))
+
+        return "\n".join(snippets)
+    except requests.exceptions.RequestException as e:
+        print(f"Warning: Tavily search failed for query '{query}': {e}")
+        return "Search failed. Do your best to evaluate based on your internal knowledge."
+
 @retry(
     wait=wait_exponential(multiplier=1, min=4, max=60),
     stop=stop_after_attempt(5),
     # Only retry if it is NOT a client error (e.g., don't retry 400 or 403 errors)
     retry=tenacity.retry_if_not_exception_type(genai.errors.ClientError)
 )
-def query_gemini(prompts):
-    """Queries Gemini using Google Search grounding and returns a JSON list."""
-
+def query_gemini_batch(combined_prompt):
+    """Queries Gemini to evaluate a pre-constructed prompt containing search context."""
     system_instruction = (
-        "You are an assistant that evaluates a list of conditional queries based on CURRENT, REAL-TIME information. "
-        "You MUST use the Google Search tool to check the current status of each query. "
-        "For each query, if the condition is TRUE (or roughly true/achieved), create a short, concise, single-sentence string explaining what was fulfilled (e.g., 'BTC is now over $100k'). "
-        "If the condition is FALSE or you cannot verify it, DO NOT include it in your output. "
+        "You are an assistant that evaluates a list of conditional queries based on the provided CURRENT, REAL-TIME search snippets. "
+        "For each query, read its associated search context carefully. "
+        "If the condition is TRUE (or roughly true/achieved), create a short, concise, single-sentence string explaining what was fulfilled (e.g., 'BTC is now over $100k'). "
+        "If the condition is FALSE or you cannot verify it from the context, DO NOT include it in your output. "
         "Your final output MUST be a valid JSON array of these short strings. "
         "If NONE of the conditions are true, output an empty JSON array `[]`. "
         "Do not include Markdown formatting like ```json ... ```, just the raw JSON array."
     )
 
-    combined_prompt = "Please evaluate the following conditions:\n\n"
-    for i, prompt in enumerate(prompts):
-        combined_prompt += f"{i+1}. {prompt}\n"
-
-    print("Querying Gemini...")
     response = client.models.generate_content(
         model='gemini-2.5-flash',
         contents=combined_prompt,
         config=types.GenerateContentConfig(
             system_instruction=system_instruction,
-            tools=[{"google_search": {}}], # Enable Google Search Grounding
             temperature=0.1, # Keep it deterministic
             response_mime_type="application/json", # Request JSON output
         )
@@ -75,16 +124,173 @@ def query_gemini(prompts):
 
     return response.text
 
+def query_groq_batch(combined_prompt):
+    """Fallback function: queries Groq if Gemini fails."""
+    if not GROQ_API_KEY:
+        print("Warning: Gemini failed and GROQ_API_KEY is not set. Cannot fallback.")
+        return None
+
+    print("  -> Initiating Groq fallback...")
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    # We embed the system instruction directly into the developer/system message
+    system_message = (
+        "You are an assistant that evaluates a list of conditional queries based on the provided CURRENT, REAL-TIME search snippets. "
+        "For each query, read its associated search context carefully. "
+        "If the condition is TRUE (or roughly true/achieved), create a short, concise, single-sentence string explaining what was fulfilled (e.g., 'BTC is now over $100k'). "
+        "If the condition is FALSE or you cannot verify it from the context, DO NOT include it in your output. "
+        "Your final output MUST be a valid JSON array of these short strings. "
+        "If NONE of the conditions are true, output an empty JSON array `[]`. "
+        "Do not include Markdown formatting like ```json ... ```, just the raw JSON array."
+    )
+
+    payload = {
+        "model": "llama-3.3-70b-versatile",
+        "messages": [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": combined_prompt}
+        ],
+        "temperature": 0.1,
+        "response_format": {"type": "json_object"} # Groq supports JSON mode
+    }
+
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=30)
+        response.raise_for_status()
+        data = response.json()
+        content = data['choices'][0]['message']['content']
+        # Groq json_object requires an object, so we might get {"alerts": []} or just an array string if it ignored strict object rules
+        return content
+    except Exception as e:
+        print(f"  -> Groq fallback failed: {e}")
+        return None
+
+
+def process_prompts_in_batches(prompts, batch_size=10):
+    """Processes prompts in batches to avoid giant requests while minimizing API calls."""
+    all_alerts = []
+
+    # Split prompts into chunks of batch_size
+    batches = [prompts[i:i + batch_size] for i in range(0, len(prompts), batch_size)]
+
+    for i, batch in enumerate(batches):
+        print(f"Preparing context for Batch {i+1}/{len(batches)}...")
+
+        # 1. Fetch context ONCE for the batch (outside of retry loops)
+        combined_prompt = "Please evaluate the following conditions based on their provided search context:\n\n"
+        for j, prompt in enumerate(batch):
+            urls = extract_urls(prompt)
+            context = fetch_jina_reader(urls[0]) if urls else ""
+            if not context:
+                context = search_tavily(prompt)
+                time.sleep(1) # Small delay to respect Tavily free tier limits
+            combined_prompt += f"Condition {j+1}: {prompt}\nSearch Context: {context}\n\n"
+
+        # 2. Query Gemini
+        print(f"Querying Gemini (Batch {i+1}/{len(batches)})...")
+        try:
+            response_text = query_gemini_batch(combined_prompt)
+            print(f"Raw Gemini response for batch {i+1}:\n{response_text}")
+        except Exception as e:
+            # Check for RetryError or ClientError that breaks the primary Gemini query
+            print(f"Error evaluating batch {i+1} with Gemini: {e}")
+
+            # 3. Fallback to Groq using the EXACT same pre-fetched context
+            response_text = query_groq_batch(combined_prompt)
+            if not response_text:
+                print("  -> Both Gemini and Groq failed. Skipping batch.")
+                continue
+            print(f"Raw Groq response for batch {i+1}:\n{response_text}")
+
+        # Try to parse whatever response_text we ended up with (Gemini or Groq)
+        try:
+            try:
+                batch_alerts = json.loads(response_text)
+            except json.JSONDecodeError as e:
+                print(f"Failed to parse Gemini response as JSON: {e}")
+                print("Trying to clean up markdown if present...")
+                # Fallback if Gemini accidentally includes markdown despite instructions
+                cleaned_text = response_text.strip()
+                if cleaned_text.startswith("```json"):
+                    cleaned_text = cleaned_text[7:]
+                if cleaned_text.endswith("```"):
+                    cleaned_text = cleaned_text[:-3]
+                try:
+                    batch_alerts = json.loads(cleaned_text.strip())
+                except json.JSONDecodeError:
+                     print("Could not recover JSON for this batch. Skipping.")
+                     batch_alerts = []
+
+            # Groq's JSON mode might wrap it in an object like {"alerts": []}
+            if isinstance(batch_alerts, dict):
+                # Try to extract the array
+                for val in batch_alerts.values():
+                    if isinstance(val, list):
+                        batch_alerts = val
+                        break
+
+            if isinstance(batch_alerts, list):
+                all_alerts.extend(batch_alerts)
+            else:
+                print("Error: Expected JSON list for this batch.")
+
+        except Exception as e:
+            print(f"Unexpected error evaluating batch {i+1}: {e}")
+
+        # Add a delay between batches to avoid rate limits (except after the last batch)
+        if i < len(batches) - 1:
+            print("Waiting 5 seconds before next batch to prevent rate limits...")
+            time.sleep(5)
+
+    return all_alerts
+
+def send_telegram_notification(message):
+    """Sends a notification to the configured Telegram Chat ID."""
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": message
+    }
+    print(f"Sending notification via Telegram...")
+    try:
+        response = requests.post(url, json=payload)
+        response.raise_for_status()
+        print("Telegram notification sent successfully.")
+    except requests.exceptions.RequestException as e:
+        print(f"Failed to send Telegram notification: {e}")
+
 def send_ntfy_notification(message):
     """Sends a notification to the configured ntfy topic."""
+    if not NTFY_TOPIC:
+        return
+
     url = f"https://ntfy.sh/{NTFY_TOPIC}"
     print(f"Sending notification to {url}...")
     try:
         response = requests.post(url, data=message.encode('utf-8'))
         response.raise_for_status()
-        print("Notification sent successfully.")
+        print("Ntfy notification sent successfully.")
     except requests.exceptions.RequestException as e:
-        print(f"Failed to send notification: {e}")
+        print(f"Failed to send ntfy notification: {e}")
+
+def ping_healthcheck():
+    """Pings Healthchecks.io if configured to signal a successful run."""
+    if not HEALTHCHECK_URL:
+        return
+
+    print(f"Pinging Healthchecks.io...")
+    try:
+        requests.get(HEALTHCHECK_URL, timeout=10)
+        print("Healthcheck ping successful.")
+    except requests.exceptions.RequestException as e:
+        print(f"Warning: Failed to ping Healthchecks.io: {e}")
 
 def main():
     prompts = read_prompts()
@@ -93,40 +299,19 @@ def main():
         return
 
     try:
-        response_text = query_gemini(prompts)
-        print(f"Raw Gemini response:\n{response_text}")
-
-        # Parse the JSON response
-        try:
-            alerts = json.loads(response_text)
-        except json.JSONDecodeError as e:
-            print(f"Failed to parse Gemini response as JSON: {e}")
-            print("Trying to clean up markdown if present...")
-            # Fallback if Gemini accidentally includes markdown despite instructions
-            cleaned_text = response_text.strip()
-            if cleaned_text.startswith("```json"):
-                cleaned_text = cleaned_text[7:]
-            if cleaned_text.endswith("```"):
-                cleaned_text = cleaned_text[:-3]
-            try:
-                alerts = json.loads(cleaned_text.strip())
-            except json.JSONDecodeError:
-                 print("Could not recover JSON. Exiting.")
-                 return
-
-        if not isinstance(alerts, list):
-            print("Error: Expected Gemini to return a JSON list.")
-            return
+        alerts = process_prompts_in_batches(prompts, batch_size=10)
 
         if alerts:
             # Join the alerts with a newline or custom separator
             notification_message = "Weekly Updates:\n" + "\n".join(f"- {alert}" for alert in alerts)
             send_ntfy_notification(notification_message)
+            send_telegram_notification(notification_message)
         else:
             print("No conditions were met. No notification sent.")
 
-    except tenacity.RetryError as e:
-        print(f"An error occurred during processing: {e.last_attempt.exception()}")
+        # If we made it this far without crashing, the job was successful
+        ping_healthcheck()
+
     except Exception as e:
          print(f"An error occurred during processing: {e}")
 

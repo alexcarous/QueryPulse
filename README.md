@@ -1,11 +1,14 @@
 # Weekly Gemini Queries via ntfy
 
-This project is a lightweight Python script that runs on a schedule (e.g., via a cron job on a Raspberry Pi). It reads a list of condition-based questions from a file (`prompts.txt`), queries the Gemini API (using Google Search grounding for real-time data), and sends a notification to your phone via [ntfy.sh](https://ntfy.sh) if any of the conditions are true.
+This project is a lightweight Python script that runs on a schedule (e.g., via a cron job on a Raspberry Pi). It reads a list of condition-based questions from a file (`prompts.txt`), fetches live real-time context via the **Tavily Search API** (or **Jina Reader** for specific URLs), queries the **Gemini API** (or **Groq** as a fallback) to evaluate the condition against the search results, and sends a notification to your phone via [ntfy.sh](https://ntfy.sh) or Telegram if any of the conditions are true.
 
 ## Features
 
-- **Real-time Evaluation:** Uses Gemini 2.5 Flash with Google Search enabled to evaluate conditions using the latest internet data.
-- **Conditional Notifications:** Only sends a push notification if one or more conditions in your prompt list evaluate to "True".
+- **Real-time Evaluation:** Uses Tavily Search to gather live context and Gemini 2.5 Flash to evaluate conditions, bypassing strict Google Search Grounding free-tier limits.
+- **Deep Web Scraping:** Automatically detects URLs in your prompts and routes them through Jina Reader to get exact webpage content.
+- **LLM Fallback:** If the Gemini API fails or runs out of quota, it automatically falls back to Groq (`llama-3.3-70b-versatile`) to ensure your questions are always answered.
+- **Conditional Notifications:** Only sends a push notification if one or more conditions in your prompt list evaluate to "True" via ntfy.sh or Telegram.
+- **Cron Monitoring:** Supports Healthchecks.io dead-man switches to alert you if the Raspberry Pi dies or the script fails.
 - **Auto-updating:** Includes a `run.sh` script that automatically pulls the latest `prompts.txt` and code from GitHub before running.
 - **Retry Logic:** Implements exponential backoff via `tenacity` to handle transient API rate limits.
 
@@ -39,9 +42,17 @@ pip install -r requirements.txt
    ```bash
    cp .env.example .env
    ```
-2. Edit `.env` and fill in your details:
+2. Edit `.env` and fill in your details. You must provide the core API keys and at least one notification channel.
    - `GEMINI_API_KEY`: Get a free key from [Google AI Studio](https://aistudio.google.com/).
-   - `NTFY_TOPIC`: Create a unique, secret topic name for [ntfy.sh](https://ntfy.sh) (e.g., `my_secret_crypto_alerts_99`).
+   - `TAVILY_API_KEY`: Get a free key from [Tavily](https://tavily.com/) (provides 1,000 free searches/month).
+
+   **Notification Channels (Choose one or both):**
+   - `NTFY_TOPIC`: Create a unique, secret topic name for [ntfy.sh](https://ntfy.sh) (e.g., `my_secret_crypto_alerts_99`). Leave blank if not using.
+   - `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID`: Get these from BotFather on Telegram to send alerts to a private chat. Leave blank if not using.
+
+   **Robustness Tools (Optional but recommended):**
+   - `GROQ_API_KEY`: Get a free key from [Groq](https://groq.com/). The script will use this ultra-fast API as a fallback if Google Gemini is down or you hit a rate limit.
+   - `HEALTHCHECK_URL`: Get a free ping URL from [Healthchecks.io](https://healthchecks.io/). The script will ping this URL when it finishes successfully. If it fails to ping, Healthchecks will email you.
 
 ### 4. Configure Prompts
 
