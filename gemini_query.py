@@ -3,11 +3,22 @@ import json
 import requests
 import time
 import re
+import logging
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
 import tenacity
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("gemini.log", encoding='utf-8'),
+        logging.StreamHandler()
+    ]
+)
 
 # Load environment variables
 load_dotenv()
@@ -21,22 +32,22 @@ GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 HEALTHCHECK_URL = os.environ.get("HEALTHCHECK_URL")
 
 if not GEMINI_API_KEY or not TAVILY_API_KEY:
-    print("Error: GEMINI_API_KEY and TAVILY_API_KEY must be set in the .env file.")
+    logging.error("GEMINI_API_KEY and TAVILY_API_KEY must be set in the .env file.")
     exit(1)
 
 if not NTFY_TOPIC and not (TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID):
-    print("Error: You must configure at least one notification channel (NTFY_TOPIC or Telegram credentials).")
+    logging.error("You must configure at least one notification channel (NTFY_TOPIC or Telegram credentials).")
     exit(1)
 
 if GEMINI_API_KEY == "your_gemini_api_key_here" or TAVILY_API_KEY == "your_tavily_api_key_here":
-    print("Error: You are still using default placeholders for your API keys. Please edit the .env file and add your real keys.")
+    logging.error("You are still using default placeholders for your API keys. Please edit the .env file and add your real keys.")
     exit(1)
 
 # Initialize Gemini Client
 try:
     client = genai.Client(api_key=GEMINI_API_KEY)
 except Exception as e:
-    print(f"Error initializing Gemini client: {e}")
+    logging.error(f"Error initializing Gemini client: {e}")
     exit(1)
 
 def extract_urls(text):
@@ -46,14 +57,16 @@ def extract_urls(text):
 
 def fetch_jina_reader(url):
     """Uses Jina Reader API to fetch raw text from a specific URL."""
-    print(f"    -> Using Jina Reader for URL: {url}")
+    logging.info(f"Fetching Jina Reader for URL: {url}")
     jina_url = f"https://r.jina.ai/{url}"
     try:
         response = requests.get(jina_url, timeout=15)
         response.raise_for_status()
-        return response.text[:3000] # Cap context size to prevent massive prompts
+        text = response.text[:3000] # Cap context size to prevent massive prompts
+        logging.info(f"Jina Reader success: fetched {len(text)} characters.")
+        return text
     except requests.exceptions.RequestException as e:
-        print(f"    -> Warning: Jina Reader failed for '{url}': {e}")
+        logging.warning(f"Jina Reader failed for '{url}': {e}")
         return None
 
 def read_prompts(filename="prompts.txt"):
@@ -61,9 +74,10 @@ def read_prompts(filename="prompts.txt"):
     try:
         with open(filename, "r") as f:
             prompts = [line.strip() for line in f if line.strip()]
+        logging.info(f"Loaded {len(prompts)} prompts from {filename}")
         return prompts
     except FileNotFoundError:
-        print(f"Error: {filename} not found.")
+        logging.error(f"{filename} not found.")
         exit(1)
 
 def search_tavily(query):
@@ -89,9 +103,11 @@ def search_tavily(query):
         for result in data.get("results", []):
             snippets.append(result.get("content", ""))
 
-        return "\n".join(snippets)
+        snippet_text = "\n".join(snippets)
+        logging.info(f"Tavily search successful. Fetched {len(snippet_text)} characters of context.")
+        return snippet_text
     except requests.exceptions.RequestException as e:
-        print(f"Warning: Tavily search failed for query '{query}': {e}")
+        logging.warning(f"Tavily search failed for query '{query}': {e}")
         return "Search failed. Do your best to evaluate based on your internal knowledge."
 
 @retry(
@@ -127,10 +143,10 @@ def query_gemini_batch(combined_prompt):
 def query_groq_batch(combined_prompt):
     """Fallback function: queries Groq if Gemini fails."""
     if not GROQ_API_KEY:
-        print("Warning: Gemini failed and GROQ_API_KEY is not set. Cannot fallback.")
+        logging.warning("Gemini failed and GROQ_API_KEY is not set. Cannot fallback.")
         return None
 
-    print("  -> Initiating Groq fallback...")
+    logging.info("Initiating Groq fallback...")
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
@@ -166,7 +182,7 @@ def query_groq_batch(combined_prompt):
         # Groq json_object requires an object, so we might get {"alerts": []} or just an array string if it ignored strict object rules
         return content
     except Exception as e:
-        print(f"  -> Groq fallback failed: {e}")
+        logging.error(f"Groq fallback failed: {e}")
         return None
 
 
@@ -178,7 +194,7 @@ def process_prompts_in_batches(prompts, batch_size=10):
     batches = [prompts[i:i + batch_size] for i in range(0, len(prompts), batch_size)]
 
     for i, batch in enumerate(batches):
-        print(f"Preparing context for Batch {i+1}/{len(batches)}...")
+        logging.info(f"Preparing context for Batch {i+1}/{len(batches)}...")
 
         # 1. Fetch context ONCE for the batch (outside of retry loops)
         combined_prompt = "Please evaluate the following conditions based on their provided search context:\n\n"
@@ -190,30 +206,36 @@ def process_prompts_in_batches(prompts, batch_size=10):
                 time.sleep(1) # Small delay to respect Tavily free tier limits
             combined_prompt += f"Condition {j+1}: {prompt}\nSearch Context: {context}\n\n"
 
+        logging.info(f"Combined prompt for batch {i+1} built. Length: {len(combined_prompt)}")
+
         # 2. Query Gemini
-        print(f"Querying Gemini (Batch {i+1}/{len(batches)})...")
+        logging.info(f"Querying Gemini (Batch {i+1}/{len(batches)})...")
         try:
             response_text = query_gemini_batch(combined_prompt)
-            print(f"Raw Gemini response for batch {i+1}:\n{response_text}")
+            logging.info(f"Raw Gemini response for batch {i+1}:\n{response_text}")
+        except tenacity.RetryError as e:
+            logging.error(f"Error evaluating batch {i+1} with Gemini: {e.last_attempt.exception()}")
+            response_text = None
         except Exception as e:
-            # Check for RetryError or ClientError that breaks the primary Gemini query
-            print(f"Error evaluating batch {i+1} with Gemini: {e}")
+            logging.error(f"Error evaluating batch {i+1} with Gemini: {e}")
+            response_text = None
 
+        if not response_text:
             # 3. Fallback to Groq using the EXACT same pre-fetched context
             response_text = query_groq_batch(combined_prompt)
             if not response_text:
-                print("  -> Both Gemini and Groq failed. Skipping batch.")
+                logging.error("Both Gemini and Groq failed. Skipping batch.")
                 continue
-            print(f"Raw Groq response for batch {i+1}:\n{response_text}")
+            logging.info(f"Raw Groq response for batch {i+1}:\n{response_text}")
 
         # Try to parse whatever response_text we ended up with (Gemini or Groq)
         try:
             try:
                 batch_alerts = json.loads(response_text)
             except json.JSONDecodeError as e:
-                print(f"Failed to parse Gemini response as JSON: {e}")
-                print("Trying to clean up markdown if present...")
-                # Fallback if Gemini accidentally includes markdown despite instructions
+                logging.warning(f"Failed to parse AI response as JSON: {e}")
+                logging.info("Trying to clean up markdown if present...")
+                # Fallback if AI accidentally includes markdown despite instructions
                 cleaned_text = response_text.strip()
                 if cleaned_text.startswith("```json"):
                     cleaned_text = cleaned_text[7:]
@@ -222,7 +244,7 @@ def process_prompts_in_batches(prompts, batch_size=10):
                 try:
                     batch_alerts = json.loads(cleaned_text.strip())
                 except json.JSONDecodeError:
-                     print("Could not recover JSON for this batch. Skipping.")
+                     logging.error("Could not recover JSON for this batch. Skipping.")
                      batch_alerts = []
 
             # Groq's JSON mode might wrap it in an object like {"alerts": []}
@@ -236,14 +258,14 @@ def process_prompts_in_batches(prompts, batch_size=10):
             if isinstance(batch_alerts, list):
                 all_alerts.extend(batch_alerts)
             else:
-                print("Error: Expected JSON list for this batch.")
+                logging.error("Expected JSON list for this batch.")
 
         except Exception as e:
-            print(f"Unexpected error evaluating batch {i+1}: {e}")
+            logging.error(f"Unexpected error parsing batch {i+1}: {e}")
 
         # Add a delay between batches to avoid rate limits (except after the last batch)
         if i < len(batches) - 1:
-            print("Waiting 5 seconds before next batch to prevent rate limits...")
+            logging.info("Waiting 5 seconds before next batch to prevent rate limits...")
             time.sleep(5)
 
     return all_alerts
@@ -258,13 +280,13 @@ def send_telegram_notification(message):
         "chat_id": TELEGRAM_CHAT_ID,
         "text": message
     }
-    print(f"Sending notification via Telegram...")
+    logging.info("Sending notification via Telegram...")
     try:
         response = requests.post(url, json=payload)
         response.raise_for_status()
-        print("Telegram notification sent successfully.")
+        logging.info("Telegram notification sent successfully.")
     except requests.exceptions.RequestException as e:
-        print(f"Failed to send Telegram notification: {e}")
+        logging.error(f"Failed to send Telegram notification: {e}")
 
 def send_ntfy_notification(message):
     """Sends a notification to the configured ntfy topic."""
@@ -272,30 +294,31 @@ def send_ntfy_notification(message):
         return
 
     url = f"https://ntfy.sh/{NTFY_TOPIC}"
-    print(f"Sending notification to {url}...")
+    logging.info(f"Sending notification to {url}...")
     try:
         response = requests.post(url, data=message.encode('utf-8'))
         response.raise_for_status()
-        print("Ntfy notification sent successfully.")
+        logging.info("Ntfy notification sent successfully.")
     except requests.exceptions.RequestException as e:
-        print(f"Failed to send ntfy notification: {e}")
+        logging.error(f"Failed to send ntfy notification: {e}")
 
 def ping_healthcheck():
     """Pings Healthchecks.io if configured to signal a successful run."""
     if not HEALTHCHECK_URL:
         return
 
-    print(f"Pinging Healthchecks.io...")
+    logging.info("Pinging Healthchecks.io...")
     try:
         requests.get(HEALTHCHECK_URL, timeout=10)
-        print("Healthcheck ping successful.")
+        logging.info("Healthcheck ping successful.")
     except requests.exceptions.RequestException as e:
-        print(f"Warning: Failed to ping Healthchecks.io: {e}")
+        logging.warning(f"Failed to ping Healthchecks.io: {e}")
 
 def main():
+    logging.info("Starting Weekly Gemini Query Script")
     prompts = read_prompts()
     if not prompts:
-        print("No prompts found in prompts.txt. Exiting.")
+        logging.warning("No prompts found in prompts.txt. Exiting.")
         return
 
     try:
@@ -304,16 +327,17 @@ def main():
         if alerts:
             # Join the alerts with a newline or custom separator
             notification_message = "Weekly Updates:\n" + "\n".join(f"- {alert}" for alert in alerts)
+            logging.info("Conditions met. Sending notifications...")
             send_ntfy_notification(notification_message)
             send_telegram_notification(notification_message)
         else:
-            print("No conditions were met. No notification sent.")
+            logging.info("No conditions were met. No notification sent.")
 
         # If we made it this far without crashing, the job was successful
         ping_healthcheck()
 
     except Exception as e:
-         print(f"An error occurred during processing: {e}")
+         logging.exception(f"A fatal error occurred during processing: {e}")
 
 if __name__ == "__main__":
     main()
