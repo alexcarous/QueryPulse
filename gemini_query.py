@@ -7,7 +7,7 @@ import logging
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
-from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
+from tenacity import retry, wait_exponential, stop_after_attempt
 import tenacity
 
 # Configure logging
