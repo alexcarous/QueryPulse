@@ -282,7 +282,7 @@ def send_telegram_notification(message):
     }
     logging.info("Sending notification via Telegram...")
     try:
-        response = requests.post(url, json=payload)
+        response = requests.post(url, json=payload, timeout=15)
         response.raise_for_status()
         logging.info("Telegram notification sent successfully.")
     except requests.exceptions.RequestException as e:
@@ -296,7 +296,7 @@ def send_ntfy_notification(message):
     url = f"https://ntfy.sh/{NTFY_TOPIC}"
     logging.info(f"Sending notification to {url}...")
     try:
-        response = requests.post(url, data=message.encode('utf-8'))
+        response = requests.post(url, data=message.encode('utf-8'), timeout=15)
         response.raise_for_status()
         logging.info("Ntfy notification sent successfully.")
     except requests.exceptions.RequestException as e:
