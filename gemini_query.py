@@ -123,9 +123,9 @@ def query_gemini_batch(combined_prompt):
         "For each query, read its associated search context carefully. "
         "If the condition is TRUE (or roughly true/achieved), create a short, concise, single-sentence string explaining what was fulfilled (e.g., 'BTC is now over $100k'). "
         "If the condition is FALSE or you cannot verify it from the context, DO NOT include it in your output. "
-        "Your final output MUST be a valid JSON array of these short strings. "
-        "If NONE of the conditions are true, output an empty JSON array `[]`. "
-        "Do not include Markdown formatting like ```json ... ```, just the raw JSON array."
+        "Your final output MUST be a valid JSON object with a single key \"fulfilled_conditions\" containing an array of these short strings. "
+        "If NONE of the conditions are true, output `{\"fulfilled_conditions\": []}`. "
+        "Do not include Markdown formatting like ```json ... ```, just the raw JSON object."
     )
 
     response = client.models.generate_content(
@@ -159,9 +159,9 @@ def query_groq_batch(combined_prompt):
         "For each query, read its associated search context carefully. "
         "If the condition is TRUE (or roughly true/achieved), create a short, concise, single-sentence string explaining what was fulfilled (e.g., 'BTC is now over $100k'). "
         "If the condition is FALSE or you cannot verify it from the context, DO NOT include it in your output. "
-        "Your final output MUST be a valid JSON array of these short strings. "
-        "If NONE of the conditions are true, output an empty JSON array `[]`. "
-        "Do not include Markdown formatting like ```json ... ```, just the raw JSON array."
+        "Your final output MUST be a valid JSON object with a single key \"fulfilled_conditions\" containing an array of these short strings. "
+        "If NONE of the conditions are true, output `{\"fulfilled_conditions\": []}`. "
+        "Do not include Markdown formatting like ```json ... ```, just the raw JSON object."
     )
 
     payload = {
