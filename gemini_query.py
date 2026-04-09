@@ -197,15 +197,16 @@ def process_prompts_in_batches(prompts, batch_size=10):
         logging.info(f"Preparing context for Batch {i+1}/{len(batches)}...")
 
         # 1. Fetch context ONCE for the batch (outside of retry loops)
-        combined_prompt = "Please evaluate the following conditions based on their provided search context:\n\n"
+        prompt_parts = ["Please evaluate the following conditions based on their provided search context:\n\n"]
         for j, prompt in enumerate(batch):
             urls = extract_urls(prompt)
             context = fetch_jina_reader(urls[0]) if urls else ""
             if not context:
                 context = search_tavily(prompt)
                 time.sleep(1) # Small delay to respect Tavily free tier limits
-            combined_prompt += f"Condition {j+1}: {prompt}\nSearch Context: {context}\n\n"
+            prompt_parts.append(f"Condition {j+1}: {prompt}\nSearch Context: {context}\n\n")
 
+        combined_prompt = "".join(prompt_parts)
         logging.info(f"Combined prompt for batch {i+1} built. Length: {len(combined_prompt)}")
 
         # 2. Query Gemini
