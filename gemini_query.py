@@ -148,10 +148,6 @@ def query_gemini_batch(combined_prompt):
 
 def query_groq_batch(combined_prompt):
     """Fallback function: queries Groq if Gemini fails."""
-    if not GROQ_API_KEY:
-        logging.warning("Gemini failed and GROQ_API_KEY is not set. Cannot fallback.")
-        return None
-
     logging.info("Initiating Groq fallback...")
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
@@ -221,19 +217,24 @@ def process_prompts_in_batches(prompts, batch_size=10):
             response_text = query_gemini_batch(combined_prompt)
             logging.info(f"Raw Gemini response for batch {i+1}:\n{response_text}")
         except tenacity.RetryError as e:
-            logging.error(f"Error evaluating batch {i+1} with Gemini: {e.last_attempt.exception()}")
+            exception = e.last_attempt.exception()
+            logging.error(f"Error evaluating batch {i+1} with Gemini (RetryError): {type(exception).__name__} - {exception}")
             response_text = None
         except Exception as e:
-            logging.error(f"Error evaluating batch {i+1} with Gemini: {e}")
+            logging.error(f"Error evaluating batch {i+1} with Gemini: {type(e).__name__} - {e}")
             response_text = None
 
         if not response_text:
-            # 3. Fallback to Groq using the EXACT same pre-fetched context
-            response_text = query_groq_batch(combined_prompt)
-            if not response_text:
-                logging.error("Both Gemini and Groq failed. Skipping batch.")
+            if GROQ_API_KEY:
+                # 3. Fallback to Groq using the EXACT same pre-fetched context
+                response_text = query_groq_batch(combined_prompt)
+                if not response_text:
+                    logging.error(f"Both Gemini and Groq failed for batch {i+1}. Skipping batch.")
+                    continue
+                logging.info(f"Raw Groq response for batch {i+1}:\n{response_text}")
+            else:
+                logging.error(f"Gemini failed for batch {i+1} and GROQ_API_KEY is not set. Skipping batch.")
                 continue
-            logging.info(f"Raw Groq response for batch {i+1}:\n{response_text}")
 
         # Try to parse whatever response_text we ended up with (Gemini or Groq)
         try:
