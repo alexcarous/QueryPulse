@@ -120,10 +120,11 @@ def search_tavily(query):
 def query_gemini_batch(combined_prompt):
     """Queries Gemini to evaluate a pre-constructed prompt containing search context."""
     system_instruction = (
-        "You are an assistant that evaluates a list of conditional queries based on the provided CURRENT, REAL-TIME search snippets. "
-        "For each query, read its associated search context carefully. "
-        "If the condition is TRUE (or roughly true/achieved), create a short, concise, single-sentence string explaining what was fulfilled (e.g., 'BTC is now over $100k'). "
-        "If the condition is FALSE or you cannot verify it from the context, DO NOT include it in your output. "
+        "You are a strict, factual assistant that evaluates a list of conditional queries based on the provided CURRENT, REAL-TIME search snippets, and by utilizing your Google Search tool if necessary. "
+        "For each query, read its associated search context carefully and verify the factual reality using your tools. "
+        "You must be absolutely certain the condition is TRUE right now. If it is speculative, future-looking, or simply discussing the topic without the condition being met, it is FALSE. "
+        "If the condition is explicitly TRUE, create a short, concise, single-sentence string explaining what was fulfilled (e.g., 'BTC is now over $100k'). "
+        "If the condition is FALSE, or if you cannot definitively verify it is true right now, DO NOT include it in your output. "
         "Your final output MUST be a valid JSON object with a single key \"fulfilled_conditions\" containing an array of these short strings. "
         "If NONE of the conditions are true, output `{\"fulfilled_conditions\": []}`. "
         "Do not include Markdown formatting like ```json ... ```, just the raw JSON object."
@@ -161,10 +162,11 @@ def query_groq_batch(combined_prompt):
 
     # We embed the system instruction directly into the developer/system message
     system_message = (
-        "You are an assistant that evaluates a list of conditional queries based on the provided CURRENT, REAL-TIME search snippets. "
+        "You are a strict, factual assistant that evaluates a list of conditional queries based on the provided CURRENT, REAL-TIME search snippets. "
         "For each query, read its associated search context carefully. "
-        "If the condition is TRUE (or roughly true/achieved), create a short, concise, single-sentence string explaining what was fulfilled (e.g., 'BTC is now over $100k'). "
-        "If the condition is FALSE or you cannot verify it from the context, DO NOT include it in your output. "
+        "You must be absolutely certain the condition is TRUE right now. If it is speculative, future-looking, or simply discussing the topic without the condition being met, it is FALSE. "
+        "If the condition is explicitly TRUE, create a short, concise, single-sentence string explaining what was fulfilled (e.g., 'BTC is now over $100k'). "
+        "If the condition is FALSE, or if you cannot definitively verify it is true right now, DO NOT include it in your output. "
         "Your final output MUST be a valid JSON object with a single key \"fulfilled_conditions\" containing an array of these short strings. "
         "If NONE of the conditions are true, output `{\"fulfilled_conditions\": []}`. "
         "Do not include Markdown formatting like ```json ... ```, just the raw JSON object."
