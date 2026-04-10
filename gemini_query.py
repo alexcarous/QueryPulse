@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 from tenacity import retry, wait_exponential, stop_after_attempt
+from pydantic import BaseModel
 import tenacity
 
 # Configure logging
@@ -128,6 +129,9 @@ def query_gemini_batch(combined_prompt):
         "Do not include Markdown formatting like ```json ... ```, just the raw JSON object."
     )
 
+    class FulfilledConditions(BaseModel):
+        fulfilled_conditions: list[str]
+
     response = client.models.generate_content(
         model='gemini-2.5-flash',
         contents=combined_prompt,
@@ -135,6 +139,8 @@ def query_gemini_batch(combined_prompt):
             system_instruction=system_instruction,
             temperature=0.1, # Keep it deterministic
             response_mime_type="application/json", # Request JSON output
+            tools=[{"google_search": {}}], # Enable Google Search Grounding
+            response_schema=FulfilledConditions
         )
     )
 
