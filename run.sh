@@ -5,8 +5,8 @@ cd "$(dirname "$0")" || exit
 
 # Pull the latest changes from the git repository
 echo "Pulling latest changes from GitHub..."
-# Automatically pull the current branch
-git pull origin $(git branch --show-current)
+# Automatically pull the current branch, but continue if it doesn't exist on remote
+git pull origin $(git branch --show-current) || echo "Local branch not found on remote. Proceeding with local version."
 
 # Activate the virtual environment
 echo "Activating virtual environment..."

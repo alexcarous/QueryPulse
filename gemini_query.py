@@ -8,7 +8,6 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 from tenacity import retry, wait_exponential, stop_after_attempt
-from pydantic import BaseModel
 import tenacity
 
 # Configure logging
