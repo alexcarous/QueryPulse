@@ -5,8 +5,13 @@ cd "$(dirname "$0")" || exit
 
 # Pull the latest changes from the git repository
 echo "Pulling latest changes from GitHub..."
-# Automatically pull the current branch, but continue if it doesn't exist on remote
-git pull origin $(git branch --show-current) || echo "Local branch not found on remote. Proceeding with local version."
+# Get the name of the primary branch (e.g. master or main) and pull it
+PRIMARY_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD | sed 's@^refs/remotes/origin/@@')
+
+# Switch to the primary branch before pulling to ensure we run production code
+git checkout "$PRIMARY_BRANCH" 2>/dev/null && \
+    git pull origin "$PRIMARY_BRANCH" || \
+    echo "Failed to checkout or pull $PRIMARY_BRANCH. Proceeding with local version."
 
 # Activate the virtual environment
 echo "Activating virtual environment..."
