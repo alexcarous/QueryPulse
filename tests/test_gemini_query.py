@@ -9,7 +9,6 @@ sys.modules['google.genai'] = MagicMock()
 sys.modules['google.genai.types'] = MagicMock()
 sys.modules['tenacity'] = MagicMock()
 sys.modules['dotenv'] = MagicMock()
-sys.modules['pydantic'] = MagicMock()
 
 # Set up environment variables required by gemini_query
 os.environ["GEMINI_API_KEY"] = "fake_key"
