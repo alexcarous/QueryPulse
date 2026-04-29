@@ -291,7 +291,7 @@ def send_telegram_notification(message):
         response.raise_for_status()
         logging.info("Telegram notification sent successfully.")
     except requests.exceptions.RequestException as e:
-        logging.error(f"Failed to send Telegram notification: {e}")
+        logging.error(f"Failed to send Telegram notification: {type(e).__name__}")
 
 def send_ntfy_notification(message):
     """Sends a notification to the configured ntfy topic."""
@@ -299,13 +299,13 @@ def send_ntfy_notification(message):
         return
 
     url = f"https://ntfy.sh/{NTFY_TOPIC}"
-    logging.info(f"Sending notification to {url}...")
+    logging.info("Sending notification via ntfy...")
     try:
         response = requests.post(url, data=message.encode('utf-8'), timeout=15)
         response.raise_for_status()
         logging.info("Ntfy notification sent successfully.")
     except requests.exceptions.RequestException as e:
-        logging.error(f"Failed to send ntfy notification: {e}")
+        logging.error(f"Failed to send ntfy notification: {type(e).__name__}")
 
 def ping_healthcheck():
     """Pings Healthchecks.io if configured to signal a successful run."""
