@@ -50,6 +50,32 @@ except Exception as e:
     logging.error(f"Error initializing Gemini client: {e}")
     exit(1)
 
+# --- System Prompt Constants ---
+SYSTEM_PROMPT_BASE = (
+    "You are a strict, factual assistant that evaluates a list of conditional queries based on the provided "
+    "CURRENT, REAL-TIME search snippets{tools_ext}. "
+    "For each query, read its associated search context carefully{verify_ext}. "
+    "You must be absolutely certain the condition is TRUE right now. If it is speculative, future-looking, "
+    "or simply discussing the topic without the condition being met, it is FALSE. "
+    "If the condition is explicitly TRUE, create a short, concise, single-sentence string explaining what "
+    "was fulfilled (e.g., 'BTC is now over $100k'). "
+    "If the condition is FALSE, or if you cannot definitively verify it is true right now, "
+    "DO NOT include it in your output. "
+)
+
+GEMINI_OUTPUT_INSTRUCTIONS = (
+    "Your final output MUST be a valid JSON array of these short strings. "
+    "If NONE of the conditions are true, output an empty JSON array `[]`. "
+    "Do not include Markdown formatting like ```json ... ```, just the raw JSON array."
+)
+
+GROQ_OUTPUT_INSTRUCTIONS = (
+    "Your final output MUST be a valid JSON object with a single key \"fulfilled_conditions\" "
+    "containing an array of these short strings. "
+    "If NONE of the conditions are true, output `{\"fulfilled_conditions\": []}`. "
+    "Do not include Markdown formatting like ```json ... ```, just the raw JSON object."
+)
+
 def extract_urls(text):
     """Extracts URLs from a string using regex."""
     url_pattern = re.compile(r'https?://[^\s]+')
@@ -119,14 +145,10 @@ def search_tavily(query):
 def query_gemini_batch(combined_prompt):
     """Queries Gemini to evaluate a pre-constructed prompt containing search context."""
     system_instruction = (
-        "You are a strict, factual assistant that evaluates a list of conditional queries based on the provided CURRENT, REAL-TIME search snippets, and by utilizing your Google Search tool if necessary. "
-        "For each query, read its associated search context carefully and verify the factual reality using your tools. "
-        "You must be absolutely certain the condition is TRUE right now. If it is speculative, future-looking, or simply discussing the topic without the condition being met, it is FALSE. "
-        "If the condition is explicitly TRUE, create a short, concise, single-sentence string explaining what was fulfilled (e.g., 'BTC is now over $100k'). "
-        "If the condition is FALSE, or if you cannot definitively verify it is true right now, DO NOT include it in your output. "
-        "Your final output MUST be a valid JSON array of these short strings. "
-        "If NONE of the conditions are true, output an empty JSON array `[]`. "
-        "Do not include Markdown formatting like ```json ... ```, just the raw JSON array."
+        SYSTEM_PROMPT_BASE.format(
+            tools_ext=", and by utilizing your Google Search tool if necessary",
+            verify_ext=" and verify the factual reality using your tools"
+        ) + GEMINI_OUTPUT_INSTRUCTIONS
     )
 
     response = client.models.generate_content(
@@ -153,14 +175,8 @@ def query_groq_batch(combined_prompt):
 
     # We embed the system instruction directly into the developer/system message
     system_message = (
-        "You are a strict, factual assistant that evaluates a list of conditional queries based on the provided CURRENT, REAL-TIME search snippets. "
-        "For each query, read its associated search context carefully. "
-        "You must be absolutely certain the condition is TRUE right now. If it is speculative, future-looking, or simply discussing the topic without the condition being met, it is FALSE. "
-        "If the condition is explicitly TRUE, create a short, concise, single-sentence string explaining what was fulfilled (e.g., 'BTC is now over $100k'). "
-        "If the condition is FALSE, or if you cannot definitively verify it is true right now, DO NOT include it in your output. "
-        "Your final output MUST be a valid JSON object with a single key \"fulfilled_conditions\" containing an array of these short strings. "
-        "If NONE of the conditions are true, output `{\"fulfilled_conditions\": []}`. "
-        "Do not include Markdown formatting like ```json ... ```, just the raw JSON object."
+        SYSTEM_PROMPT_BASE.format(tools_ext="", verify_ext="") +
+        GROQ_OUTPUT_INSTRUCTIONS
     )
 
     payload = {
