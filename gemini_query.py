@@ -50,10 +50,12 @@ except Exception as e:
     logging.error(f"Error initializing Gemini client: {e}")
     exit(1)
 
+# Pre-compile regex for performance
+URL_PATTERN = re.compile(r'https?://[^\s]+')
+
 def extract_urls(text):
     """Extracts URLs from a string using regex."""
-    url_pattern = re.compile(r'https?://[^\s]+')
-    return url_pattern.findall(text)
+    return URL_PATTERN.findall(text)
 
 def fetch_jina_reader(url):
     """Uses Jina Reader API to fetch raw text from a specific URL."""

@@ -31,3 +31,8 @@ def test_read_prompts_file_not_found():
                 gemini_query.read_prompts("non_existent.txt")
                 mock_logging_error.assert_called_once_with("non_existent.txt not found.")
                 mock_exit.assert_called_once_with(1)
+
+def test_extract_urls():
+    text = "Check out https://google.com and http://example.com/path. Also https://github.com."
+    urls = gemini_query.extract_urls(text)
+    assert urls == ["https://google.com", "http://example.com/path.", "https://github.com."]
