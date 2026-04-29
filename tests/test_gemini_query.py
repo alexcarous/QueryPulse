@@ -31,3 +31,25 @@ def test_read_prompts_file_not_found():
                 gemini_query.read_prompts("non_existent.txt")
                 mock_logging_error.assert_called_once_with("non_existent.txt not found.")
                 mock_exit.assert_called_once_with(1)
+
+def test_extract_urls():
+    # Test single URL
+    assert gemini_query.extract_urls("Check out https://google.com") == ["https://google.com"]
+
+    # Test multiple URLs
+    text = "Visit http://example.com and https://another.com/path"
+    assert gemini_query.extract_urls(text) == ["http://example.com", "https://another.com/path"]
+
+    # Test no URLs
+    assert gemini_query.extract_urls("No URLs here.") == []
+
+    # Test empty string
+    assert gemini_query.extract_urls("") == []
+
+    # Test greedy behavior with trailing punctuation (as per current implementation)
+    assert gemini_query.extract_urls("Go to https://example.com.") == ["https://example.com."]
+    assert gemini_query.extract_urls("(https://example.com/path)") == ["https://example.com/path)"]
+
+    # Test URL in the middle of text without spaces around it (not supported by current regex)
+    # The regex is r'https?://[^\s]+', so it starts matching at http and continues until a space.
+    assert gemini_query.extract_urls("prefixhttps://example.com") == ["https://example.com"]
