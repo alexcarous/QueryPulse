@@ -291,7 +291,8 @@ def send_telegram_notification(message):
         response.raise_for_status()
         logging.info("Telegram notification sent successfully.")
     except requests.exceptions.RequestException as e:
-        logging.error(f"Failed to send Telegram notification: {e}")
+        error_msg = str(e).replace(TELEGRAM_BOT_TOKEN, "[REDACTED]")
+        logging.error(f"Failed to send Telegram notification: {error_msg}")
 
 def send_ntfy_notification(message):
     """Sends a notification to the configured ntfy topic."""
@@ -305,7 +306,8 @@ def send_ntfy_notification(message):
         response.raise_for_status()
         logging.info("Ntfy notification sent successfully.")
     except requests.exceptions.RequestException as e:
-        logging.error(f"Failed to send ntfy notification: {e}")
+        error_msg = str(e).replace(NTFY_TOPIC, "[REDACTED]")
+        logging.error(f"Failed to send ntfy notification: {error_msg}")
 
 def ping_healthcheck():
     """Pings Healthchecks.io if configured to signal a successful run."""
@@ -317,7 +319,8 @@ def ping_healthcheck():
         requests.get(HEALTHCHECK_URL, timeout=10)
         logging.info("Healthcheck ping successful.")
     except requests.exceptions.RequestException as e:
-        logging.warning(f"Failed to ping Healthchecks.io: {e}")
+        error_msg = str(e).replace(HEALTHCHECK_URL, "[REDACTED]")
+        logging.warning(f"Failed to ping Healthchecks.io: {error_msg}")
 
 def main():
     logging.info("Starting Weekly Gemini Query Script")
