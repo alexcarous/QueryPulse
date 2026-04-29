@@ -7,7 +7,6 @@ import logging
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
-from tenacity import retry, wait_exponential, stop_after_attempt
 import tenacity
 
 # Configure logging
@@ -110,9 +109,9 @@ def search_tavily(query):
         logging.warning(f"Tavily search failed for query '{query}': {e}")
         return "Search failed. Do your best to evaluate based on your internal knowledge."
 
-@retry(
-    wait=wait_exponential(multiplier=1, min=4, max=60),
-    stop=stop_after_attempt(5),
+@tenacity.retry(
+    wait=tenacity.wait_exponential(multiplier=1, min=4, max=60),
+    stop=tenacity.stop_after_attempt(5),
     # Only retry if it is NOT a client error (e.g., don't retry 400 or 403 errors)
     retry=tenacity.retry_if_not_exception_type(genai.errors.ClientError)
 )
