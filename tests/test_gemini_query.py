@@ -31,3 +31,15 @@ def test_read_prompts_file_not_found():
                 gemini_query.read_prompts("non_existent.txt")
                 mock_logging_error.assert_called_once_with("non_existent.txt not found.")
                 mock_exit.assert_called_once_with(1)
+
+def test_extract_urls_empty_text():
+    assert gemini_query.extract_urls("") == []
+
+def test_extract_urls_no_urls():
+    assert gemini_query.extract_urls("no urls here") == []
+
+def test_extract_urls_single_url():
+    assert gemini_query.extract_urls("Check out https://example.com for info") == ["https://example.com"]
+
+def test_extract_urls_multiple_urls():
+    assert gemini_query.extract_urls("Search https://google.com or http://bing.com") == ["https://google.com", "http://bing.com"]
