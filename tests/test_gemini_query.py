@@ -31,3 +31,35 @@ def test_read_prompts_file_not_found():
                 gemini_query.read_prompts("non_existent.txt")
                 mock_logging_error.assert_called_once_with("non_existent.txt not found.")
                 mock_exit.assert_called_once_with(1)
+
+# Create a proper exception class since requests is mocked
+class MockRequestException(Exception):
+    pass
+
+def test_ping_healthcheck_success():
+    with patch("gemini_query.HEALTHCHECK_URL", "http://fake-url"):
+        with patch("gemini_query.requests.get") as mock_get:
+            gemini_query.ping_healthcheck()
+            mock_get.assert_called_once_with("http://fake-url", timeout=10)
+
+def test_ping_healthcheck_no_url():
+    with patch("gemini_query.HEALTHCHECK_URL", ""):
+        with patch("gemini_query.requests.get") as mock_get:
+            gemini_query.ping_healthcheck()
+            mock_get.assert_not_called()
+
+def test_ping_healthcheck_exception():
+    with patch("gemini_query.HEALTHCHECK_URL", "http://fake-url"):
+        with patch("gemini_query.requests.get") as mock_get:
+            mock_get.side_effect = MockRequestException("fake error")
+            # We need to temporarily assign our mock exception to the module's requests.exceptions.RequestException
+            original_exception = gemini_query.requests.exceptions.RequestException
+            gemini_query.requests.exceptions.RequestException = MockRequestException
+
+            try:
+                with patch("gemini_query.logging.warning") as mock_warning:
+                    gemini_query.ping_healthcheck()
+                    mock_warning.assert_called_once_with("Failed to ping Healthchecks.io: fake error")
+            finally:
+                # Restore the original just in case
+                gemini_query.requests.exceptions.RequestException = original_exception
