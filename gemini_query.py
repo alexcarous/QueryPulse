@@ -2,6 +2,7 @@ import os
 import json
 import requests
 import time
+import functools
 import re
 import logging
 from dotenv import load_dotenv
@@ -55,6 +56,7 @@ def extract_urls(text):
     url_pattern = re.compile(r'https?://[^\s]+')
     return url_pattern.findall(text)
 
+@functools.lru_cache(maxsize=100)
 def fetch_jina_reader(url):
     """Uses Jina Reader API to fetch raw text from a specific URL."""
     logging.info(f"Fetching Jina Reader for URL: {url}")
