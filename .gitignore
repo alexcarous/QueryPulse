@@ -1,0 +1,15 @@
+# Logs
+*.log
+logs/
+
+# Data and Config
+.env
+prompts.txt
+env/
+venv/
+.Python
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
