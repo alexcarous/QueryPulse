@@ -46,6 +46,8 @@ HEALTHCHECK_URL = os.environ.get("HEALTHCHECK_URL")
 GOOGLE_CREDENTIALS_FILE = os.environ.get("GOOGLE_CREDENTIALS_FILE")
 GOOGLE_SHEET_NAME = os.environ.get("GOOGLE_SHEET_NAME")
 FREQUENCY = os.environ.get("FREQUENCY", "weekly")
+# Use FREQUENCY as the default for SCHEDULE if SCHEDULE is not explicitly set
+SCHEDULE = os.environ.get("SCHEDULE", FREQUENCY).lower()
 
 # Model configuration with defaults
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
@@ -97,6 +99,61 @@ except Exception as e:
 def extract_urls(text: str) -> List[str]:
     """Extracts URLs from a string using regex."""
     return URL_PATTERN.findall(text)
+
+def should_run() -> bool:
+    """
+    Checks if the script should run based on the SCHEDULE and the last run timestamp.
+    Supported schedules: hourly, daily, weekly, annually.
+    """
+    if SCHEDULE == "always":
+        return True
+
+    last_run_file = os.path.join(os.path.dirname(__file__), ".last_run")
+    
+    if not os.path.exists(last_run_file):
+        logger.info("No last run record found. Proceeding with run.")
+        return True
+
+    try:
+        with open(last_run_file, "r") as f:
+            last_run_time = float(f.read().strip())
+    except (ValueError, OSError):
+        logger.warning("Could not read last run timestamp. Proceeding with run.")
+        return True
+
+    current_time = time.time()
+    elapsed_seconds = current_time - last_run_time
+
+    # Map schedules to seconds
+    schedule_map = {
+        "hourly": 3600,
+        "daily": 86400,
+        "weekly": 604800,
+        "annually": 31536000
+    }
+
+    if SCHEDULE not in schedule_map:
+        logger.warning(f"Unknown schedule '{SCHEDULE}'. Defaulting to 'always'.")
+        return True
+
+    required_seconds = schedule_map[SCHEDULE]
+    
+    # We use a small buffer (60s) to account for slight cron variations
+    if elapsed_seconds >= (required_seconds - 60):
+        return True
+    
+    remaining = int((required_seconds - elapsed_seconds) / 60)
+    logger.info(f"Schedule '{SCHEDULE}' not yet met. {remaining} minutes remaining. Skipping.")
+    return False
+
+def update_last_run() -> None:
+    """Updates the .last_run file with the current timestamp."""
+    last_run_file = os.path.join(os.path.dirname(__file__), ".last_run")
+    try:
+        with open(last_run_file, "w") as f:
+            f.write(str(time.time()))
+    except OSError as e:
+        logger.error(f"Failed to update last run timestamp: {e}")
 
 def jina_fallback(retry_state) -> None:
     logger.warning(f"Jina Reader failed after {retry_state.attempt_number} attempts: {retry_state.outcome.exception()}")
@@ -478,6 +535,9 @@ def ping_healthcheck() -> None:
     logger.info("Healthcheck ping successful.")
 
 def main() -> None:
+    if not should_run():
+        return
+
     logger.info("Starting QueryPulse")
     prompts = read_prompts()
     if not prompts:
@@ -495,6 +555,7 @@ def main() -> None:
             logger.info("No conditions were met. No notification sent.")
 
         ping_healthcheck()
+        update_last_run()
 
     except Exception as e:
          logger.exception(f"A fatal error occurred during processing: {e}")
