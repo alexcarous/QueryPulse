@@ -45,6 +45,7 @@ GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 HEALTHCHECK_URL = os.environ.get("HEALTHCHECK_URL")
 GOOGLE_CREDENTIALS_FILE = os.environ.get("GOOGLE_CREDENTIALS_FILE")
 GOOGLE_SHEET_NAME = os.environ.get("GOOGLE_SHEET_NAME")
+FREQUENCY = os.environ.get("FREQUENCY", "weekly")
 
 # Model configuration with defaults
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
