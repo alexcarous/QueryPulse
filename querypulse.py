@@ -499,5 +499,4 @@ def main() -> None:
          logger.exception(f"A fatal error occurred during processing: {e}")
 
 if __name__ == "__main__":
-    main()ame__ == "__main__":
     main()
