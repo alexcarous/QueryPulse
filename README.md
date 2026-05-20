@@ -55,7 +55,8 @@ pip install -r requirements.txt
    - `HEALTHCHECK_URL`: Get a free ping URL from [Healthchecks.io](https://healthchecks.io/). The script will ping this URL when it finishes successfully. If it fails to ping, Healthchecks will email you.
 
    **Scheduling / Frequency (Optional):**
-   - `FREQUENCY`: (Default: `Weekly`) Changes the title of your notifications (e.g. "Daily Updates", "Hourly Updates"). Options: `second`, `minute`, `hourly`, `daily`, `weekly`, `annually`.
+   - `SCHEDULE`: (Default: `weekly`) Controls how often the script actually executes when triggered (e.g., by an hourly cron job). Options: `always`, `hourly`, `daily`, `weekly`, `annually`.
+- `FREQUENCY`: (Default: `weekly`) Changes the title of your notifications (e.g. "Daily Updates", "Hourly Updates"). If `SCHEDULE` is not set, it also defines the run frequency.
 
    **Model Overrides (Optional):**
    - `GEMINI_MODEL`: (Default: `gemini-flash-latest`) The Gemini model to use.
