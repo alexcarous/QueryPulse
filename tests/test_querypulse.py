@@ -84,26 +84,5 @@ class TestQueryPulse(unittest.TestCase):
         self.assertEqual(mock_fetch_context.call_count, 2)
         mock_query_groq.assert_called_once()
 
-    @patch("querypulse.http_session.get")
-    def test_get_latest_groq_model_dynamic(self, mock_get):
-        # Mocking Groq /v1/models response
-        mock_response = MagicMock()
-        mock_response.json.return_value = {
-            "data": [
-                {"id": "old-model", "created": 1000, "active": True},
-                {"id": "new-llama-model", "created": 2000, "active": True},
-                {"id": "whisper-model", "created": 3000, "active": True}
-            ]
-        }
-        mock_response.raise_for_status.return_value = None
-        mock_get.return_value = mock_response
-        
-        # Clear cache if exists from previous tests
-        if hasattr(querypulse.get_latest_groq_model, "_cached_model"):
-            del querypulse.get_latest_groq_model._cached_model
-            
-        model = querypulse.get_latest_groq_model()
-        self.assertEqual(model, "new-llama-model")
-
 if __name__ == '__main__':
     unittest.main()

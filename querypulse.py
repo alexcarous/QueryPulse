@@ -52,53 +52,7 @@ http_session = requests.Session()
 http_session.headers.update({"User-Agent": DEFAULT_USER_AGENT})
 
 # Model configuration
-GROQ_MODEL_SETTING = os.environ.get("GROQ_MODEL", "latest")
-
-def get_latest_groq_model() -> str:
-    """Dynamically fetches the latest high-performance Groq model."""
-    if not GROQ_API_KEY:
-        return "llama-3.3-70b-versatile"
-
-    if hasattr(get_latest_groq_model, "_cached_model"):
-        return get_latest_groq_model._cached_model
-
-    logger.info("Discovering latest Groq models...")
-    url = "https://api.groq.com/openai/v1/models"
-    headers = {"Authorization": f"Bearer {GROQ_API_KEY}"}
-    
-    try:
-        response = http_session.get(url, headers=headers, timeout=10)
-        response.raise_for_status()
-        models = response.json().get("data", [])
-        
-        valid_models = [
-            m for m in models 
-            if m.get("active") and 
-            any(brand in m["id"].lower() for brand in ["llama", "groq", "scout"]) and
-            not any(bad in m["id"].lower() for bad in ["instant", "whisper", "guard"])
-        ]
-        
-        if not valid_models:
-            return "llama-3.3-70b-versatile"
-
-        valid_models.sort(key=lambda x: x.get("created", 0), reverse=True)
-        latest_id = valid_models[0]["id"]
-        
-        logger.info(f"Dynamically selected latest Groq model: {latest_id}")
-        get_latest_groq_model._cached_model = latest_id
-        return latest_id
-
-    except Exception as e:
-        logger.warning(f"Failed to fetch latest Groq models: {e}. Using fallback.")
-        return "llama-3.3-70b-versatile"
-
-def resolve_groq_model(requested_model: str) -> str:
-    """Resolves a requested Groq model name."""
-    if requested_model.lower() in ["latest", "flash", "groq-flash-latest"]:
-        return get_latest_groq_model()
-    return requested_model
-
-GROQ_MODEL = resolve_groq_model(GROQ_MODEL_SETTING)
+GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 
 if not GROQ_API_KEY or not TAVILY_API_KEY:
     logger.error("GROQ_API_KEY and TAVILY_API_KEY must be set in the .env file.")
@@ -348,7 +302,9 @@ def process_prompts_in_batches(prompts: List[str], batch_size: int = 10) -> List
         if response_text:
             all_alerts.extend(safe_json_parse(response_text))
         
-        if i < len(batches) - 1: time.sleep(2)
+        if i < len(batches) - 1:
+            logger.info("Waiting 5 seconds before next batch...")
+            time.sleep(5)
 
     return all_alerts
 
