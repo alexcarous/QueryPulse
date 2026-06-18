@@ -12,8 +12,6 @@ from threading import Lock
 from logging.handlers import RotatingFileHandler
 from typing import List, Optional, Tuple, Any
 from dotenv import load_dotenv
-from google import genai
-from google.genai import types
 import tenacity
 from tenacity import retry, wait_exponential, stop_after_attempt
 
@@ -22,17 +20,12 @@ log_dir = os.path.join(os.path.dirname(__file__), "logs")
 os.makedirs(log_dir, exist_ok=True)
 log_file_path = os.path.join(log_dir, "querypulse.log")
 
-# Use RotatingFileHandler to prevent logs from growing indefinitely
 handler = RotatingFileHandler(log_file_path, maxBytes=5*1024*1024, backupCount=2, encoding='utf-8')
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        handler,
-        logging.StreamHandler()
-    ]
+    handlers=[handler, logging.StreamHandler()]
 )
-# Use a specific logger to avoid capturing noisy third-party debug logs (e.g., urllib3)
 logger = logging.getLogger("querypulse")
 
 CACHE_FILE = os.path.join(os.path.dirname(__file__), ".tavily_cache.json")
@@ -41,64 +34,82 @@ cache_lock = Lock()
 # Load environment variables
 load_dotenv()
 
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 HEALTHCHECK_URL = os.environ.get("HEALTHCHECK_URL")
 GOOGLE_CREDENTIALS_FILE = os.environ.get("GOOGLE_CREDENTIALS_FILE")
 GOOGLE_SHEET_NAME = os.environ.get("GOOGLE_SHEET_NAME")
 FREQUENCY = os.environ.get("FREQUENCY", "weekly")
-# Use FREQUENCY as the default for SCHEDULE if SCHEDULE is not explicitly set
 SCHEDULE = os.environ.get("SCHEDULE", FREQUENCY).lower()
 
-# Model configuration with defaults
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
-GROQ_MODEL_SETTING = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+# Constants & Networking
+DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+URL_PATTERN = re.compile(r'https?://[^\s]+')
+http_session = requests.Session()
+http_session.headers.update({"User-Agent": DEFAULT_USER_AGENT})
+
+# Model configuration
+GROQ_MODEL_SETTING = os.environ.get("GROQ_MODEL", "latest")
+
+def get_latest_groq_model() -> str:
+    """Dynamically fetches the latest high-performance Groq model."""
+    if not GROQ_API_KEY:
+        return "llama-3.3-70b-versatile"
+
+    if hasattr(get_latest_groq_model, "_cached_model"):
+        return get_latest_groq_model._cached_model
+
+    logger.info("Discovering latest Groq models...")
+    url = "https://api.groq.com/openai/v1/models"
+    headers = {"Authorization": f"Bearer {GROQ_API_KEY}"}
+    
+    try:
+        response = http_session.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        models = response.json().get("data", [])
+        
+        valid_models = [
+            m for m in models 
+            if m.get("active") and 
+            any(brand in m["id"].lower() for brand in ["llama", "groq", "scout"]) and
+            not any(bad in m["id"].lower() for bad in ["instant", "whisper", "guard"])
+        ]
+        
+        if not valid_models:
+            return "llama-3.3-70b-versatile"
+
+        valid_models.sort(key=lambda x: x.get("created", 0), reverse=True)
+        latest_id = valid_models[0]["id"]
+        
+        logger.info(f"Dynamically selected latest Groq model: {latest_id}")
+        get_latest_groq_model._cached_model = latest_id
+        return latest_id
+
+    except Exception as e:
+        logger.warning(f"Failed to fetch latest Groq models: {e}. Using fallback.")
+        return "llama-3.3-70b-versatile"
 
 def resolve_groq_model(requested_model: str) -> str:
-    """
-    Resolves a requested Groq model name. 
-    If 'latest' or 'flash' is requested, it tries to pick the best current performance model.
-    """
+    """Resolves a requested Groq model name."""
     if requested_model.lower() in ["latest", "flash", "groq-flash-latest"]:
-        # In a real scenario, we could query /v1/models here.
-        # For robustness, we'll return a prioritized stable ID known to be high-performance.
-        return "llama-3.3-70b-versatile" 
+        return get_latest_groq_model()
     return requested_model
 
 GROQ_MODEL = resolve_groq_model(GROQ_MODEL_SETTING)
 
-# Constants
-DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-
-# Pre-compile regex for performance
-URL_PATTERN = re.compile(r'https?://[^\s]+')
-
-# Use a global session to enable HTTP Keep-Alive (connection pooling)
-# This significantly reduces latency by skipping TLS handshakes on repeat requests
-http_session = requests.Session()
-http_session.headers.update({"User-Agent": DEFAULT_USER_AGENT})
-
-if not GEMINI_API_KEY or not TAVILY_API_KEY:
-    logger.error("GEMINI_API_KEY and TAVILY_API_KEY must be set in the .env file.")
+if not GROQ_API_KEY or not TAVILY_API_KEY:
+    logger.error("GROQ_API_KEY and TAVILY_API_KEY must be set in the .env file.")
     sys.exit(1)
 
 if not NTFY_TOPIC and not (TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID):
-    logger.error("You must configure at least one notification channel (NTFY_TOPIC or Telegram credentials).")
+    logger.error("You must configure at least one notification channel.")
     sys.exit(1)
 
-if GEMINI_API_KEY == "your_gemini_api_key_here" or TAVILY_API_KEY == "your_tavily_api_key_here":
-    logger.error("You are still using default placeholders for your API keys. Please edit the .env file and add your real keys.")
-    sys.exit(1)
-
-# Initialize Gemini Client
-try:
-    client = genai.Client(api_key=GEMINI_API_KEY)
-except Exception as e:
-    logger.error(f"Error initializing Gemini client: {e}")
+if GROQ_API_KEY == "your_groq_api_key_here" or TAVILY_API_KEY == "your_tavily_api_key_here":
+    logger.error("You are still using default placeholders for your API keys.")
     sys.exit(1)
 
 def extract_urls(text: str) -> List[str]:
@@ -106,50 +117,23 @@ def extract_urls(text: str) -> List[str]:
     return URL_PATTERN.findall(text)
 
 def should_run() -> bool:
-    """
-    Checks if the script should run based on the SCHEDULE and the last run timestamp.
-    Supported schedules: hourly, daily, weekly, annually.
-    """
+    """Checks if the script should run based on the SCHEDULE."""
     if SCHEDULE == "always":
         return True
 
     last_run_file = os.path.join(os.path.dirname(__file__), ".last_run")
-    
     if not os.path.exists(last_run_file):
-        logger.info("No last run record found. Proceeding with run.")
         return True
 
     try:
         with open(last_run_file, "r") as f:
             last_run_time = float(f.read().strip())
     except (ValueError, OSError):
-        logger.warning("Could not read last run timestamp. Proceeding with run.")
         return True
 
-    current_time = time.time()
-    elapsed_seconds = current_time - last_run_time
-
-    # Map schedules to seconds
-    schedule_map = {
-        "hourly": 3600,
-        "daily": 86400,
-        "weekly": 604800,
-        "annually": 31536000
-    }
-
-    if SCHEDULE not in schedule_map:
-        logger.warning(f"Unknown schedule '{SCHEDULE}'. Defaulting to 'always'.")
-        return True
-
-    required_seconds = schedule_map[SCHEDULE]
-    
-    # We use a small buffer (60s) to account for slight cron variations
-    if elapsed_seconds >= (required_seconds - 60):
-        return True
-    
-    remaining = int((required_seconds - elapsed_seconds) / 60)
-    logger.info(f"Schedule '{SCHEDULE}' not yet met. {remaining} minutes remaining. Skipping.")
-    return False
+    schedule_map = {"hourly": 3600, "daily": 86400, "weekly": 604800, "annually": 31536000}
+    required_seconds = schedule_map.get(SCHEDULE, 0)
+    return (time.time() - last_run_time) >= (required_seconds - 60)
 
 def update_last_run() -> None:
     """Updates the .last_run file with the current timestamp."""
@@ -184,287 +168,131 @@ def save_cache(cache_data: dict) -> None:
             if os.path.exists(temp_file):
                 os.remove(temp_file)
 
-
 def jina_fallback(retry_state) -> None:
-    logger.warning(f"Jina Reader failed after {retry_state.attempt_number} attempts: {retry_state.outcome.exception()}")
-    return None
+    logger.warning(f"Jina Reader failed: {retry_state.outcome.exception()}")
 
-@retry(
-    wait=wait_exponential(multiplier=1, min=4, max=60),
-    stop=stop_after_attempt(5),
-    retry=tenacity.retry_if_exception_type(requests.exceptions.RequestException),
-    retry_error_callback=jina_fallback
-)
+@retry(wait=wait_exponential(multiplier=1, min=4, max=60), stop=stop_after_attempt(5), retry=tenacity.retry_if_exception_type(requests.exceptions.RequestException), retry_error_callback=jina_fallback)
 def fetch_jina_reader(url: str) -> Optional[str]:
     """Uses Jina Reader API to fetch raw text from a specific URL."""
-    logger.info(f"Fetching Jina Reader for URL: {url}")
     jina_url = f"https://r.jina.ai/{url}"
-    
     response = http_session.get(jina_url, timeout=15)
     response.raise_for_status()
-    text = response.text[:3000] # Cap context size to prevent massive prompts
-    logger.info(f"Jina Reader success: fetched {len(text)} characters.")
-    return text
+    return response.text[:3000]
 
 def sheets_fallback(retry_state) -> List[str]:
-    logger.error(f"Failed to fetch prompts from Google Sheets after {retry_state.attempt_number} attempts: {retry_state.outcome.exception()}")
+    logger.error(f"Sheets fetch failed: {retry_state.outcome.exception()}")
     return []
 
-@retry(
-    wait=wait_exponential(multiplier=1, min=4, max=60),
-    stop=stop_after_attempt(5),
-    retry=tenacity.retry_if_exception_type(Exception),
-    retry_error_callback=sheets_fallback
-)
+@retry(wait=wait_exponential(multiplier=1, min=4, max=60), stop=stop_after_attempt(5), retry=tenacity.retry_if_exception_type(Exception), retry_error_callback=sheets_fallback)
 def fetch_google_sheets_prompts() -> List[str]:
     """Authenticates with Google and reads active prompts from a specific sheet."""
     logger.info(f"Connecting to Google Sheets API to read '{GOOGLE_SHEET_NAME}'...")
-    
     try:
         gc = gspread.service_account(filename=GOOGLE_CREDENTIALS_FILE)
-    except FileNotFoundError:
-        logger.error(f"Google credentials file '{GOOGLE_CREDENTIALS_FILE}' not found.")
-        return []
-        
-    try:
-        # Try opening by key/ID first (more robust)
         try:
             sh = gc.open_by_key(GOOGLE_SHEET_NAME)
-        except (gspread.exceptions.APIError, gspread.exceptions.SpreadsheetNotFound):
-            # Fallback to opening by exact title
+        except (gspread.exceptions.APIError, gspread.exceptions.SpreadsheetNotFound, AttributeError):
             sh = gc.open(GOOGLE_SHEET_NAME)
-            
-        worksheet = sh.sheet1 
-    except (gspread.exceptions.SpreadsheetNotFound, gspread.exceptions.APIError) as e:
-         logger.error(f"Spreadsheet '{GOOGLE_SHEET_NAME}' not found or inaccessible: {e}")
-         return []
-
-    records = worksheet.get_all_records()
-    
-    active_prompts = []
-    for row in records:
-        # Create a lowercase mapping of the row keys for case-insensitive lookup
-        row_lower = {str(k).lower().strip(): v for k, v in row.items()}
-        
-        # Look for 'status' or 'statuses'
-        status = str(row_lower.get('status', row_lower.get('statuses', ''))).strip().lower()
-        
-        # Consider it active if it's 'active', 'true', or empty
-        if status in ('active', 'true', '') or not status:
-            # Look for 'prompt' or 'prompts'
-            prompt = str(row_lower.get('prompt', row_lower.get('prompts', ''))).strip()
-            if prompt:
-                active_prompts.append(prompt)
-                
-    logger.info(f"Successfully loaded {len(active_prompts)} prompts from Google Sheets.")
-    return active_prompts
+        worksheet = sh.sheet1
+        records = worksheet.get_all_records()
+        active_prompts = []
+        for row in records:
+            row_lower = {str(k).lower().strip(): v for k, v in row.items()}
+            status = str(row_lower.get('status', row_lower.get('statuses', ''))).strip().lower()
+            if status in ('active', 'true', '') or not status:
+                prompt = str(row_lower.get('prompt', row_lower.get('prompts', ''))).strip()
+                if prompt: active_prompts.append(prompt)
+        logger.info(f"Successfully loaded {len(active_prompts)} prompts from Google Sheets.")
+        return active_prompts
+    except Exception as e:
+        logger.error(f"Google Sheets error: {e}")
+        return []
 
 def read_prompts(filename: str = "prompts.txt") -> List[str]:
-    """Reads prompts from Google Sheets if configured, otherwise falls back to local file."""
+    """Reads prompts from Google Sheets or local file."""
     if GOOGLE_CREDENTIALS_FILE and GOOGLE_SHEET_NAME:
         prompts = fetch_google_sheets_prompts()
-        if prompts:
-            return prompts
-        logger.warning("Google Sheets fetch failed or returned no prompts. Falling back to local file.")
+        if prompts: return prompts
 
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    filepath = os.path.join(script_dir, filename)
+    filepath = os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
     try:
         with open(filepath, "r") as f:
-            prompts = [line.strip() for line in f if line.strip()]
-        logger.info(f"Loaded {len(prompts)} prompts from {filepath}")
-        return prompts
+            return [line.strip() for line in f if line.strip()]
     except FileNotFoundError:
-        logger.error(f"{filepath} not found.")
-        return [] # Return empty instead of exiting immediately to let main handle it
+        return []
 
 def tavily_fallback(retry_state) -> str:
-    logger.warning(f"Tavily search failed after {retry_state.attempt_number} attempts: {retry_state.outcome.exception()}")
-    return "Search failed. Do your best to evaluate based on your internal knowledge."
+    logger.warning(f"Tavily failed: {retry_state.outcome.exception()}")
+    return "Search failed."
 
-@retry(
-    wait=wait_exponential(multiplier=1, min=4, max=60),
-    stop=stop_after_attempt(5),
-    retry=tenacity.retry_if_exception_type(requests.exceptions.RequestException),
-    retry_error_callback=tavily_fallback
-)
+@retry(wait=wait_exponential(multiplier=1, min=4, max=60), stop=stop_after_attempt(5), retry=tenacity.retry_if_exception_type(requests.exceptions.RequestException), retry_error_callback=tavily_fallback)
 def search_tavily(query: str) -> str:
-    """Queries the Tavily API to get search context for a prompt."""
+    """Queries the Tavily API for context."""
     url = "https://api.tavily.com/search"
-    payload = {
-        "api_key": TAVILY_API_KEY,
-        "query": query,
-        "search_depth": "basic",
-        "include_answer": False,
-        "include_images": False,
-        "include_raw_content": False,
-        "max_results": 3
-    }
-
+    payload = {"api_key": TAVILY_API_KEY, "query": query, "search_depth": "basic", "max_results": 3}
     response = http_session.post(url, json=payload, timeout=15)
     response.raise_for_status()
-    data = response.json()
-
-    # Combine snippets from the results
-    snippets = []
-    for result in data.get("results", []):
-        snippets.append(result.get("content", ""))
-
-    snippet_text = "\n".join(snippets)
-    logger.info(f"Tavily search successful. Fetched {len(snippet_text)} characters of context.")
-    return snippet_text
-
-@retry(
-    wait=wait_exponential(multiplier=1, min=4, max=60),
-    stop=stop_after_attempt(5),
-    # Only retry if it is NOT a client error (e.g., don't retry 400 or 403 errors)
-    retry=tenacity.retry_if_not_exception_type(genai.errors.ClientError)
-)
-def query_gemini_batch(combined_prompt: str) -> str:
-    """Queries Gemini to evaluate a pre-constructed prompt containing search context."""
-    system_instruction = (
-        "You are a strict, factual assistant that evaluates a list of conditional queries based on the provided CURRENT, REAL-TIME search snippets, and by utilizing your Google Search tool if necessary. "
-        "For each query, read its associated search context carefully and verify the factual reality using your tools. "
-        "You must be absolutely certain the condition is TRUE right now. If it is speculative, future-looking, or simply discussing the topic without the condition being met, it is FALSE. "
-        "If the condition is explicitly TRUE, create a short, concise, single-sentence string explaining what was fulfilled (e.g., 'BTC is now over $100k'). "
-        "If the condition is FALSE, or if you cannot definitively verify it is true right now, DO NOT include it in your output. "
-        "Your final output MUST be a valid JSON array of these short strings. "
-        "If NONE of the conditions are true, output an empty JSON array `[]`. "
-        "Do not include Markdown formatting like ```json ... ```, just the raw JSON array."
-    )
-
-    response = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=combined_prompt,
-        config=types.GenerateContentConfig(
-            system_instruction=system_instruction,
-            temperature=0.1, # Keep it deterministic
-            tools=[{"google_search": {}}], # Enable Google Search Grounding
-        )
-    )
-    
-    # Handle Safety Filters
-    if not response.candidates or not response.candidates[0].content.parts:
-        logger.warning("Gemini response was blocked or empty (likely safety filters).")
-        return "[]"
-
-    return response.text
+    snippets = [result.get("content", "") for result in response.json().get("results", [])]
+    return "\n".join(snippets)
 
 def check_if_stale_via_groq(prompt: str, last_timestamp: float) -> bool:
-    """Uses Groq to decide if a cached search result is likely to be stale."""
-    if not GROQ_API_KEY:
-        return True # Default to stale if no key
-
+    """Uses Groq to decide if a cached result is stale."""
+    if not GROQ_API_KEY: return True
     human_time = datetime.fromtimestamp(last_timestamp).strftime("%A, %B %d, %Y at %I:%M %p UTC")
-    
-    logger.info(f"Checking staleness for: '{prompt}' (Last verified: {human_time})")
-    
     url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
-        "Content-Type": "application/json"
-    }
-
-    system_message = "You are a factual volatility analyst. Answer ONLY 'YES' or 'NO'."
-    user_message = (
-        f"Question: Is it probable that the factual answer to this query: '{prompt}' "
-        f"has changed since {human_time}? "
-        "Answer only 'YES' or 'NO'."
-    )
-
+    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     payload = {
         "model": GROQ_MODEL,
         "messages": [
-            {"role": "system", "content": system_message},
-            {"role": "user", "content": user_message}
+            {"role": "system", "content": "You are a factual volatility analyst. Answer ONLY 'YES' or 'NO'."},
+            {"role": "user", "content": f"Is it probable that the factual answer to '{prompt}' has changed since {human_time}? Answer ONLY 'YES' or 'NO'."}
         ],
         "temperature": 0.0,
         "max_tokens": 5
     }
-
     try:
         response = http_session.post(url, headers=headers, json=payload, timeout=10)
-        response.raise_for_status()
         answer = response.json()['choices'][0]['message']['content'].strip().upper()
-        
-        # Robust parsing: look for NO specifically, otherwise assume YES (stale)
-        if "NO" in answer and "YES" not in answer:
-            logger.info(f"Groq: Result is still fresh. Skipping Tavily.")
-            return False
-            
-        logger.info(f"Groq: Result is likely stale (Answer: {answer}). Refreshing via Tavily.")
-        return True
-    except Exception as e:
-        logger.error(f"Groq staleness check failed: {e}. Defaulting to stale.")
+        return "NO" not in answer
+    except Exception:
         return True
 
-@retry(
-    wait=wait_exponential(multiplier=1, min=4, max=60),
-    stop=stop_after_attempt(3),
-    retry=tenacity.retry_if_exception_type(requests.exceptions.RequestException)
-)
+@retry(wait=wait_exponential(multiplier=1, min=4, max=60), stop=stop_after_attempt(3), retry=tenacity.retry_if_exception_type(requests.exceptions.RequestException))
 def query_groq_batch(combined_prompt: str) -> Optional[str]:
-    """Fallback function: queries Groq if Gemini fails."""
-    if not GROQ_API_KEY:
-        return None
-
-    logger.info("Initiating Groq fallback...")
+    """Evaluates prompts using Groq."""
+    if not GROQ_API_KEY: return None
     url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
-        "Content-Type": "application/json"
-    }
-
+    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
     system_message = (
-        "You are a strict, factual assistant that evaluates a list of conditional queries based on the provided CURRENT, REAL-TIME search snippets. "
-        "For each query, read its associated search context carefully. "
-        "You must be absolutely certain the condition is TRUE right now. If it is speculative, future-looking, or simply discussing the topic without the condition being met, it is FALSE. "
-        "If the condition is explicitly TRUE, create a short, concise, single-sentence string explaining what was fulfilled (e.g., 'BTC is now over $100k'). "
-        "If the condition is FALSE, or if you cannot definitively verify it is true right now, DO NOT include it in your output. "
-        "Your final output MUST be a valid JSON object with a single key \"fulfilled_conditions\" containing an array of these short strings. "
-        "If NONE of the conditions are true, output `{\"fulfilled_conditions\": []}`. "
-        "Do not include Markdown formatting like ```json ... ```, just the raw JSON object."
+        "You are a strict, factual assistant. Evaluate the conditions based on provided search snippets. "
+        "Return a JSON object: {\"fulfilled_conditions\": [\"short description of true conditions\"]}. "
+        "If none are true, return {\"fulfilled_conditions\": []}."
     )
-
     payload = {
         "model": GROQ_MODEL,
-        "messages": [
-            {"role": "system", "content": system_message},
-            {"role": "user", "content": combined_prompt}
-        ],
+        "messages": [{"role": "system", "content": system_message}, {"role": "user", "content": combined_prompt}],
         "temperature": 0.1,
         "response_format": {"type": "json_object"}
     }
-
     response = http_session.post(url, headers=headers, json=payload, timeout=30)
     response.raise_for_status()
-    data = response.json()
-    return data['choices'][0]['message']['content']
+    return response.json()['choices'][0]['message']['content']
 
 def safe_json_parse(text: str) -> List[str]:
     """Attempts to extract and parse a JSON array from the AI's response text."""
-    if not text:
-        return []
-
+    if not text: return []
     text = text.strip()
-    
-    # 1. Direct parse attempt
     try:
         data = json.loads(text)
         return _extract_list_from_data(data)
     except json.JSONDecodeError:
         pass
-
-    # 2. Try cleaning markdown if present
     cleaned = re.sub(r'```(?:json)?\s*(.*?)\s*```', r'\1', text, flags=re.DOTALL).strip()
     try:
         data = json.loads(cleaned)
         return _extract_list_from_data(data)
     except json.JSONDecodeError:
         pass
-
-    # 3. Regex-based array extraction as a last resort
-    # Use non-greedy matching `.*?` to avoid grabbing multiple separate blocks incorrectly
     match = re.search(r'\[.*?\]', text, re.DOTALL)
     if match:
         try:
@@ -472,209 +300,90 @@ def safe_json_parse(text: str) -> List[str]:
             return _extract_list_from_data(data)
         except json.JSONDecodeError:
             pass
-
-    logger.error(f"Failed to parse AI response as JSON: {text[:200]}...")
     return []
 
 def _extract_list_from_data(data: Any) -> List[str]:
-    """Helper to extract a list of strings from parsed JSON data (either list or dict)."""
-    if isinstance(data, list):
-        return [str(item) for item in data]
-    
+    """Helper to extract a list of strings from parsed JSON data."""
+    if isinstance(data, list): return [str(item) for item in data]
     if isinstance(data, dict):
-        # Groq might return {"fulfilled_conditions": [...]}
         for val in data.values():
-            if isinstance(val, list):
-                return [str(item) for item in val]
-    
+            if isinstance(val, list): return [str(item) for item in val]
     return []
 
 def _fetch_context_for_single_prompt(prompt: str, cache: dict) -> Tuple[str, str, Optional[dict]]:
-    """
-    Helper function to fetch context for a single prompt.
-    Returns (prompt, context, new_cache_entry)
-    """
+    """Fetches context using Jina, Cache, or Tavily."""
     urls = extract_urls(prompt)
     if urls:
         context = fetch_jina_reader(urls[0])
-        if context:
-            return prompt, context, None # URLs are always fresh via Jina
+        if context: return prompt, context, None
 
-    # Check Cache
     cached_entry = cache.get(prompt)
-    if cached_entry:
-        is_stale = check_if_stale_via_groq(prompt, cached_entry['timestamp'])
-        if not is_stale:
-            return prompt, cached_entry['context'], None
+    if cached_entry and not check_if_stale_via_groq(prompt, cached_entry['timestamp']):
+        return prompt, cached_entry['context'], None
 
-    # If missing or stale, search Tavily
     context = search_tavily(prompt)
-    new_entry = {
-        "context": context,
-        "timestamp": time.time(),
-        "human_time": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
-    }
-    return prompt, context, new_entry
+    return prompt, context, {"context": context, "timestamp": time.time(), "human_time": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")}
 
 def process_prompts_in_batches(prompts: List[str], batch_size: int = 10) -> List[str]:
-    """Processes prompts in batches to avoid giant requests while minimizing API calls."""
-    all_alerts = []
-    
-    # Load cache once
-    cache = load_cache()
-    new_cache_entries = {}
-
-    # Deduplicate prompts while preserving order
+    """Processes prompts in batches."""
+    all_alerts, cache = [], load_cache()
     unique_prompts = list(dict.fromkeys(prompts))
-    if len(unique_prompts) < len(prompts):
-        logger.info(f"Deduplicated prompts: {len(prompts)} -> {len(unique_prompts)}")
-
     batches = [unique_prompts[i:i + batch_size] for i in range(0, len(unique_prompts), batch_size)]
 
     for i, batch in enumerate(batches):
-        logger.info(f"Preparing context for Batch {i+1}/{len(batches)}...")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(batch), 10)) as executor:
+            results = list(executor.map(lambda p: _fetch_context_for_single_prompt(p, cache), batch))
 
-        # Concurrency for fetching context
-        max_workers = min(len(batch), 10)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # We use a lambda to pass the cache to the fetcher
-            fetch_func = lambda p: _fetch_context_for_single_prompt(p, cache)
-            results = list(executor.map(fetch_func, batch))
+        prompt_parts = ["Evaluate these conditions based on context:\n\n"]
+        new_entries = {}
+        for original_prompt, context, new_entry in results:
+            prompt_parts.append(f"Prompt: {original_prompt}\nContext: {context}\n\n")
+            if new_entry: new_entries[original_prompt] = new_entry
 
-        prompt_parts = ["Please evaluate the following conditions based on their provided search context:\n\n"]
-        for j, (original_prompt, context, new_entry) in enumerate(results):
-            prompt_parts.append(f"Condition {j+1}: {original_prompt}\nSearch Context: {context}\n\n")
-            if new_entry:
-                new_cache_entries[original_prompt] = new_entry
-
-        # Update cache if we have new entries
-        if new_cache_entries:
-            cache.update(new_cache_entries)
+        if new_entries:
+            cache.update(new_entries)
             save_cache(cache)
-            new_cache_entries = {} # Clear for next batch
 
-        combined_prompt = "".join(prompt_parts)
-        logger.info(f"Combined prompt for batch {i+1} built. Length: {len(combined_prompt)}")
-
-        logger.info(f"Querying Gemini (Batch {i+1}/{len(batches)})...")
-        response_text = None
-        try:
-            response_text = query_gemini_batch(combined_prompt)
-        except tenacity.RetryError as e:
-            exception = e.last_attempt.exception()
-            logger.error(f"Gemini failed after retries for batch {i+1}: {type(exception).__name__} - {exception}")
-        except genai.errors.ClientError as e:
-            logger.error(f"Gemini client error for batch {i+1}: {e}")
-        except Exception as e:
-            logger.error(f"Unexpected error when querying Gemini for batch {i+1}: {e}")
-
-        if not response_text:
-            try:
-                response_text = query_groq_batch(combined_prompt)
-            except Exception as e:
-                logger.error(f"Groq fallback failed after retries for batch {i+1}: {e}")
-        
+        response_text = query_groq_batch("".join(prompt_parts))
         if response_text:
-            logger.info(f"Raw response for batch {i+1} received.")
-            batch_alerts = safe_json_parse(response_text)
-            all_alerts.extend(batch_alerts)
-        else:
-            logger.error(f"Both Gemini and Groq failed for batch {i+1}. Skipping batch.")
-
-        if i < len(batches) - 1:
-            logger.info("Waiting 5 seconds before next batch to prevent rate limits...")
-            time.sleep(5)
+            all_alerts.extend(safe_json_parse(response_text))
+        
+        if i < len(batches) - 1: time.sleep(2)
 
     return all_alerts
 
-def notification_fallback(retry_state) -> None:
-    logger.error(f"Notification failed after {retry_state.attempt_number} attempts: {retry_state.outcome.exception()}")
-    return None
-
-@retry(
-    wait=wait_exponential(multiplier=1, min=4, max=60),
-    stop=stop_after_attempt(5),
-    retry=tenacity.retry_if_exception_type(requests.exceptions.RequestException),
-    retry_error_callback=notification_fallback
-)
+@retry(wait=wait_exponential(multiplier=1, min=4, max=60), stop=stop_after_attempt(5), retry=tenacity.retry_if_exception_type(requests.exceptions.RequestException))
 def send_telegram_notification(message: str) -> None:
-    """Sends a notification to the configured Telegram Chat ID."""
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        return
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID: return
+    http_session.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", json={"chat_id": TELEGRAM_CHAT_ID, "text": message}, timeout=15).raise_for_status()
 
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": message
-    }
-    logger.info("Sending notification via Telegram...")
-    response = http_session.post(url, json=payload, timeout=15)
-    response.raise_for_status()
-    logger.info("Telegram notification sent successfully.")
-
-@retry(
-    wait=wait_exponential(multiplier=1, min=4, max=60),
-    stop=stop_after_attempt(5),
-    retry=tenacity.retry_if_exception_type(requests.exceptions.RequestException),
-    retry_error_callback=notification_fallback
-)
+@retry(wait=wait_exponential(multiplier=1, min=4, max=60), stop=stop_after_attempt(5), retry=tenacity.retry_if_exception_type(requests.exceptions.RequestException))
 def send_ntfy_notification(message: str) -> None:
-    """Sends a notification to the configured ntfy topic."""
-    if not NTFY_TOPIC:
-        return
+    if not NTFY_TOPIC: return
+    http_session.post(f"https://ntfy.sh/{NTFY_TOPIC}", data=message.encode('utf-8'), timeout=15).raise_for_status()
 
-    url = f"https://ntfy.sh/{NTFY_TOPIC}"
-    logger.info(f"Sending notification to {url}...")
-    response = http_session.post(url, data=message.encode('utf-8'), timeout=15)
-    response.raise_for_status()
-    logger.info("Ntfy notification sent successfully.")
-
-def send_all_notifications(message: str) -> None:
-    """Sends a notification message to all configured channels."""
-    send_ntfy_notification(message)
-    send_telegram_notification(message)
-
-@retry(
-    wait=wait_exponential(multiplier=1, min=2, max=10),
-    stop=stop_after_attempt(3),
-    retry=tenacity.retry_if_exception_type(requests.exceptions.RequestException)
-)
+@retry(wait=wait_exponential(multiplier=1, min=2, max=10), stop=stop_after_attempt(3), retry=tenacity.retry_if_exception_type(requests.exceptions.RequestException))
 def ping_healthcheck() -> None:
-    """Pings Healthchecks.io if configured to signal a successful run."""
-    if not HEALTHCHECK_URL:
-        return
-
-    logger.info("Pinging Healthchecks.io...")
-    response = http_session.get(HEALTHCHECK_URL, timeout=10)
-    # This was previously missing: if it returns a 500, we want it to retry
-    response.raise_for_status() 
-    logger.info("Healthcheck ping successful.")
+    if not HEALTHCHECK_URL: return
+    http_session.get(HEALTHCHECK_URL, timeout=10).raise_for_status()
 
 def main() -> None:
-    if not should_run():
-        return
-
-    logger.info("Starting QueryPulse")
+    if not should_run(): return
+    logger.info("Starting QueryPulse (Groq-Only Mode)")
     prompts = read_prompts()
-    if not prompts:
-        logger.warning("No prompts found in prompts.txt. Exiting.")
-        return
+    if not prompts: return
 
     try:
         alerts = process_prompts_in_batches(prompts, batch_size=10)
-
         if alerts:
-            notification_message = f"{FREQUENCY.capitalize()} Updates:\n" + "\n".join(f"- {alert}" for alert in alerts)
-            logger.info("Conditions met. Sending notifications...")
-            send_all_notifications(notification_message)
-        else:
-            logger.info("No conditions were met. No notification sent.")
-
+            msg = f"{FREQUENCY.capitalize()} Updates:\n" + "\n".join(f"- {a}" for a in alerts)
+            send_ntfy_notification(msg)
+            send_telegram_notification(msg)
+        
         ping_healthcheck()
         update_last_run()
-
     except Exception as e:
-         logger.exception(f"A fatal error occurred during processing: {e}")
+        logger.exception(f"Fatal error: {e}")
 
 if __name__ == "__main__":
     main()
