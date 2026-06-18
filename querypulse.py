@@ -7,6 +7,8 @@ import re
 import logging
 import sys
 import gspread
+from datetime import datetime
+from threading import Lock
 from logging.handlers import RotatingFileHandler
 from typing import List, Optional, Tuple, Any
 from dotenv import load_dotenv
@@ -32,6 +34,9 @@ logging.basicConfig(
 )
 # Use a specific logger to avoid capturing noisy third-party debug logs (e.g., urllib3)
 logger = logging.getLogger("querypulse")
+
+CACHE_FILE = os.path.join(os.path.dirname(__file__), ".tavily_cache.json")
+cache_lock = Lock()
 
 # Load environment variables
 load_dotenv()
@@ -153,7 +158,32 @@ def update_last_run() -> None:
         with open(last_run_file, "w") as f:
             f.write(str(time.time()))
     except OSError as e:
-        logger.error(f"Failed to update last run timestamp: {e}")
+        logger.error(f"Could not update last run record: {e}")
+
+def load_cache() -> dict:
+    """Loads the search cache from disk."""
+    if not os.path.exists(CACHE_FILE):
+        return {}
+    try:
+        with open(CACHE_FILE, "r") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        logger.error(f"Could not load cache: {e}")
+        return {}
+
+def save_cache(cache_data: dict) -> None:
+    """Saves the search cache to disk atomically."""
+    with cache_lock:
+        temp_file = CACHE_FILE + ".tmp"
+        try:
+            with open(temp_file, "w") as f:
+                json.dump(cache_data, f, indent=2)
+            os.replace(temp_file, CACHE_FILE)
+        except OSError as e:
+            logger.error(f"Could not save cache: {e}")
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+
 
 def jina_fallback(retry_state) -> None:
     logger.warning(f"Jina Reader failed after {retry_state.attempt_number} attempts: {retry_state.outcome.exception()}")
@@ -320,6 +350,54 @@ def query_gemini_batch(combined_prompt: str) -> str:
 
     return response.text
 
+def check_if_stale_via_groq(prompt: str, last_timestamp: float) -> bool:
+    """Uses Groq to decide if a cached search result is likely to be stale."""
+    if not GROQ_API_KEY:
+        return True # Default to stale if no key
+
+    human_time = datetime.fromtimestamp(last_timestamp).strftime("%A, %B %d, %Y at %I:%M %p UTC")
+    
+    logger.info(f"Checking staleness for: '{prompt}' (Last verified: {human_time})")
+    
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    system_message = "You are a factual volatility analyst. Answer ONLY 'YES' or 'NO'."
+    user_message = (
+        f"Question: Is it probable that the factual answer to this query: '{prompt}' "
+        f"has changed since {human_time}? "
+        "Answer only 'YES' or 'NO'."
+    )
+
+    payload = {
+        "model": GROQ_MODEL,
+        "messages": [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": user_message}
+        ],
+        "temperature": 0.0,
+        "max_tokens": 5
+    }
+
+    try:
+        response = http_session.post(url, headers=headers, json=payload, timeout=10)
+        response.raise_for_status()
+        answer = response.json()['choices'][0]['message']['content'].strip().upper()
+        
+        # Robust parsing: look for NO specifically, otherwise assume YES (stale)
+        if "NO" in answer and "YES" not in answer:
+            logger.info(f"Groq: Result is still fresh. Skipping Tavily.")
+            return False
+            
+        logger.info(f"Groq: Result is likely stale (Answer: {answer}). Refreshing via Tavily.")
+        return True
+    except Exception as e:
+        logger.error(f"Groq staleness check failed: {e}. Defaulting to stale.")
+        return True
+
 @retry(
     wait=wait_exponential(multiplier=1, min=4, max=60),
     stop=stop_after_attempt(3),
@@ -411,31 +489,69 @@ def _extract_list_from_data(data: Any) -> List[str]:
     
     return []
 
-def _fetch_context_for_single_prompt(prompt: str) -> Tuple[str, str]:
-    """Helper function to fetch context for a single prompt."""
+def _fetch_context_for_single_prompt(prompt: str, cache: dict) -> Tuple[str, str, Optional[dict]]:
+    """
+    Helper function to fetch context for a single prompt.
+    Returns (prompt, context, new_cache_entry)
+    """
     urls = extract_urls(prompt)
-    context = fetch_jina_reader(urls[0]) if urls else ""
-    if not context:
-        context = search_tavily(prompt)
-    return prompt, context
+    if urls:
+        context = fetch_jina_reader(urls[0])
+        if context:
+            return prompt, context, None # URLs are always fresh via Jina
+
+    # Check Cache
+    cached_entry = cache.get(prompt)
+    if cached_entry:
+        is_stale = check_if_stale_via_groq(prompt, cached_entry['timestamp'])
+        if not is_stale:
+            return prompt, cached_entry['context'], None
+
+    # If missing or stale, search Tavily
+    context = search_tavily(prompt)
+    new_entry = {
+        "context": context,
+        "timestamp": time.time(),
+        "human_time": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    }
+    return prompt, context, new_entry
 
 def process_prompts_in_batches(prompts: List[str], batch_size: int = 10) -> List[str]:
     """Processes prompts in batches to avoid giant requests while minimizing API calls."""
     all_alerts = []
-    batches = [prompts[i:i + batch_size] for i in range(0, len(prompts), batch_size)]
+    
+    # Load cache once
+    cache = load_cache()
+    new_cache_entries = {}
+
+    # Deduplicate prompts while preserving order
+    unique_prompts = list(dict.fromkeys(prompts))
+    if len(unique_prompts) < len(prompts):
+        logger.info(f"Deduplicated prompts: {len(prompts)} -> {len(unique_prompts)}")
+
+    batches = [unique_prompts[i:i + batch_size] for i in range(0, len(unique_prompts), batch_size)]
 
     for i, batch in enumerate(batches):
         logger.info(f"Preparing context for Batch {i+1}/{len(batches)}...")
 
-        # Concurrency: HTTP requests are I/O bound, we don't need to limit by CPU cores.
-        # Cap at 10 to be respectful to third-party APIs.
-        max_workers = min(batch_size, 10)
+        # Concurrency for fetching context
+        max_workers = min(len(batch), 10)
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            context_results = list(executor.map(_fetch_context_for_single_prompt, batch))
+            # We use a lambda to pass the cache to the fetcher
+            fetch_func = lambda p: _fetch_context_for_single_prompt(p, cache)
+            results = list(executor.map(fetch_func, batch))
 
         prompt_parts = ["Please evaluate the following conditions based on their provided search context:\n\n"]
-        for j, (original_prompt, context) in enumerate(context_results):
+        for j, (original_prompt, context, new_entry) in enumerate(results):
             prompt_parts.append(f"Condition {j+1}: {original_prompt}\nSearch Context: {context}\n\n")
+            if new_entry:
+                new_cache_entries[original_prompt] = new_entry
+
+        # Update cache if we have new entries
+        if new_cache_entries:
+            cache.update(new_cache_entries)
+            save_cache(cache)
+            new_cache_entries = {} # Clear for next batch
 
         combined_prompt = "".join(prompt_parts)
         logger.info(f"Combined prompt for batch {i+1} built. Length: {len(combined_prompt)}")
