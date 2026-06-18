@@ -115,7 +115,7 @@ class TestQueryPulse(unittest.TestCase):
     def test_process_prompts_in_batches_success(self, mock_fetch_context, mock_query_gemini):
         # Setup mocks
         prompts = ["prompt1", "prompt2"]
-        mock_fetch_context.side_effect = [("prompt1", "context1"), ("prompt2", "context2")]
+        mock_fetch_context.side_effect = [("prompt1", "context1", None), ("prompt2", "context2", None)]
         
         # Simulate a successful JSON response from Gemini
         mock_query_gemini.return_value = '["Condition 1 met", "Condition 2 met"]'
@@ -130,7 +130,7 @@ class TestQueryPulse(unittest.TestCase):
     @patch("querypulse._fetch_context_for_single_prompt")
     def test_process_prompts_in_batches_markdown_json(self, mock_fetch_context, mock_query_gemini):
         prompts = ["prompt1"]
-        mock_fetch_context.side_effect = [("prompt1", "context1")]
+        mock_fetch_context.side_effect = [("prompt1", "context1", None)]
         
         # Simulate AI returning markdown-wrapped JSON
         mock_query_gemini.return_value = '```json\n["Alert 1"]\n```'
@@ -143,7 +143,7 @@ class TestQueryPulse(unittest.TestCase):
     @patch("querypulse._fetch_context_for_single_prompt")
     def test_process_prompts_in_batches_gemini_fails_groq_succeeds(self, mock_fetch_context, mock_query_groq, mock_query_gemini):
         prompts = ["prompt1"]
-        mock_fetch_context.side_effect = [("prompt1", "context1")]
+        mock_fetch_context.side_effect = [("prompt1", "context1", None)]
         
         # Setup Gemini to fail
         mock_query_gemini.return_value = None
