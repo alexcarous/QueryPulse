@@ -6,7 +6,6 @@ import time
 import re
 import logging
 import sys
-import gspread
 from datetime import datetime
 from threading import Lock
 from logging.handlers import RotatingFileHandler
@@ -40,8 +39,6 @@ NTFY_TOPIC = os.environ.get("NTFY_TOPIC")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 HEALTHCHECK_URL = os.environ.get("HEALTHCHECK_URL")
-GOOGLE_CREDENTIALS_FILE = os.environ.get("GOOGLE_CREDENTIALS_FILE")
-GOOGLE_SHEET_NAME = os.environ.get("GOOGLE_SHEET_NAME")
 FREQUENCY = os.environ.get("FREQUENCY", "weekly")
 SCHEDULE = os.environ.get("SCHEDULE", FREQUENCY).lower()
 
@@ -133,46 +130,16 @@ def fetch_jina_reader(url: str) -> Optional[str]:
     response.raise_for_status()
     return response.text[:3000]
 
-def sheets_fallback(retry_state) -> List[str]:
-    logger.error(f"Sheets fetch failed: {retry_state.outcome.exception()}")
-    return []
-
-@retry(wait=wait_exponential(multiplier=1, min=4, max=60), stop=stop_after_attempt(5), retry=tenacity.retry_if_exception_type(Exception), retry_error_callback=sheets_fallback)
-def fetch_google_sheets_prompts() -> List[str]:
-    """Authenticates with Google and reads active prompts from a specific sheet."""
-    logger.info(f"Connecting to Google Sheets API to read '{GOOGLE_SHEET_NAME}'...")
-    try:
-        gc = gspread.service_account(filename=GOOGLE_CREDENTIALS_FILE)
-        try:
-            sh = gc.open_by_key(GOOGLE_SHEET_NAME)
-        except (gspread.exceptions.APIError, gspread.exceptions.SpreadsheetNotFound, AttributeError):
-            sh = gc.open(GOOGLE_SHEET_NAME)
-        worksheet = sh.sheet1
-        records = worksheet.get_all_records()
-        active_prompts = []
-        for row in records:
-            row_lower = {str(k).lower().strip(): v for k, v in row.items()}
-            status = str(row_lower.get('status', row_lower.get('statuses', ''))).strip().lower()
-            if status in ('active', 'true', '') or not status:
-                prompt = str(row_lower.get('prompt', row_lower.get('prompts', ''))).strip()
-                if prompt: active_prompts.append(prompt)
-        logger.info(f"Successfully loaded {len(active_prompts)} prompts from Google Sheets.")
-        return active_prompts
-    except Exception as e:
-        logger.error(f"Google Sheets error: {e}")
-        return []
-
 def read_prompts(filename: str = "prompts.txt") -> List[str]:
-    """Reads prompts from Google Sheets or local file."""
-    if GOOGLE_CREDENTIALS_FILE and GOOGLE_SHEET_NAME:
-        prompts = fetch_google_sheets_prompts()
-        if prompts: return prompts
-
+    """Reads prompts from a local file."""
     filepath = os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
     try:
         with open(filepath, "r") as f:
-            return [line.strip() for line in f if line.strip()]
+            prompts = [line.strip() for line in f if line.strip()]
+        logger.info(f"Loaded {len(prompts)} prompts from {filepath}")
+        return prompts
     except FileNotFoundError:
+        logger.error(f"{filepath} not found.")
         return []
 
 def tavily_fallback(retry_state) -> str:
