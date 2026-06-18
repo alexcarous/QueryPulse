@@ -5,9 +5,17 @@ logs/
 # Data and Config
 .env
 prompts.txt
+.last_run
+.tavily_cache.json
+*.json
+!prompts.example.json
 env/
 venv/
 .Python
+
+# IDEs
+.vscode/
+.idea/
 
 # Python
 __pycache__/
