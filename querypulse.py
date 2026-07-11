@@ -1,3 +1,12 @@
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#   "requests==2.32.3",
+#   "python-dotenv==1.0.1",
+#   "tenacity==9.0.0",
+# ]
+# ///
+
 import concurrent.futures
 import os
 import json
