@@ -9,7 +9,6 @@ This project is a lightweight Python script that runs on a schedule (e.g., via a
 - **LLM Fallback:** If the Gemini API fails or runs out of quota, it automatically falls back to Groq (dynamically selecting the best available model) to ensure your questions are always answered.
 - **Conditional Notifications:** Only sends a push notification if one or more conditions in your prompt list evaluate to "True" via ntfy.sh or Telegram.
 - **Cron Monitoring:** Supports Healthchecks.io dead-man switches to alert you if the Raspberry Pi dies or the script fails.
-- **Auto-updating:** Includes a `run.sh` script that automatically pulls the latest `prompts.txt` and code from GitHub before running.
 - **Retry Logic:** Implements exponential backoff via `tenacity` to handle transient API rate limits.
 
 ## Setup Instructions (Raspberry Pi)
@@ -21,20 +20,15 @@ git clone https://github.com/alexcarous/QueryPulse.git
 cd QueryPulse
 ```
 
-### 2. Set Up the Environment
+### 2. Install `uv`
 
-It's recommended to use a Python virtual environment:
+Dependencies are managed automatically by [`uv`](https://docs.astral.sh/uv/). Install it with:
 
 ```bash
-# Create a virtual environment
-python3 -m venv venv
-
-# Activate it
-source venv/bin/activate
-
-# Install dependencies
-pip install -r requirements.txt
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
+
+No virtual environment or `pip install` needed — `uv` handles everything on first run.
 
 ### 3. Configure Secrets
 
@@ -56,7 +50,7 @@ pip install -r requirements.txt
 
    **Scheduling / Frequency (Optional):**
    - `SCHEDULE`: (Default: `weekly`) Controls how often the script actually executes when triggered (e.g., by an hourly cron job). Options: `always`, `hourly`, `daily`, `weekly`, `annually`.
-- `FREQUENCY`: (Default: `weekly`) Changes the title of your notifications (e.g. "Daily Updates", "Hourly Updates"). If `SCHEDULE` is not set, it also defines the run frequency.
+   - `FREQUENCY`: (Default: `weekly`) Changes the title of your notifications (e.g. "Daily Updates", "Hourly Updates"). If `SCHEDULE` is not set, it also defines the run frequency.
 
    **Model Overrides (Optional):**
    - `GEMINI_MODEL`: (Default: `gemini-flash-latest`) The Gemini model to use.
@@ -74,30 +68,24 @@ Is Bitcoin's price over $100k USD yet?
 Is the S&P 500 currently trading above 6000?
 ```
 
-### 5. Update `run.sh` (Optional)
+### 5. Testing the Setup
 
-The `run.sh` script assumes your virtual environment is named `venv` and is located in the same directory. If you named your virtual environment something else, edit `run.sh` to update the path.
-
-The script will automatically pull the latest changes from the `master` branch before running.
-
-### 6. Testing the Setup
-
-Before setting up the cron job, it's highly recommended to test the script manually to ensure everything is configured correctly (API keys, ntfy topic, virtual environment).
+Before setting up the cron job, it's highly recommended to test the script manually to ensure everything is configured correctly (API keys, ntfy topic, etc.).
 
 1. Make sure you are in the repository directory.
 2. Add a prompt to `prompts.txt` that is **guaranteed to be true** so you can confirm the notification system works. For example:
    ```text
    Is the sky generally considered blue?
    ```
-3. Run the wrapper script manually:
+3. Run the script directly with `uv`:
    ```bash
-   ./run.sh
+   uv run querypulse.py
    ```
-4. Watch the terminal output. It should pull from git, activate the environment, query Gemini, and then output `Notification sent successfully.`. Check your phone/browser ntfy subscription to see the alert!
+4. Watch the terminal output. It should install dependencies, query Gemini, and then output `Notification sent successfully.`. Check your phone/browser ntfy subscription to see the alert!
 
-### 7. Set Up the Cron Job
+### 6. Set Up the Cron Job
 
-To run the script on a schedule (e.g., every Monday at 9:00 AM), set up a cron job.
+To run the script on a schedule (e.g., every Sunday at midnight), set up a cron job.
 
 1. Open the crontab editor:
    ```bash
@@ -105,7 +93,7 @@ To run the script on a schedule (e.g., every Monday at 9:00 AM), set up a cron j
    ```
 2. Add the following line (replace `/path/to/your/repo` with the actual absolute path):
    ```cron
-   0 9 * * 1 /path/to/your/repo/run.sh >> /path/to/your/repo/cron.log 2>&1
+   0 0 * * 0 uv run /path/to/your/repo/querypulse.py >> /path/to/your/repo/cron.log 2>&1
    ```
 
-This will run the script, fetch the latest code/prompts from GitHub, query Gemini, and log the output to `cron.log`.
+This will run the script, query Gemini, and log the output to `cron.log`.
