@@ -1,5 +1,7 @@
 # QueryPulse: Condition-Based Alerts
 
+![querypulse illustration](docs/assets/querypulse.svg)
+
 This project is a lightweight Python script that runs on a schedule (e.g., via a cron job on a Raspberry Pi). It reads a list of condition-based questions from a file (`prompts.txt`), fetches live real-time context via the **Tavily Search API** (or **Jina Reader** for specific URLs), queries the **Gemini API** (or **Groq** as a fallback) to evaluate the condition against the search results, and sends a notification to your phone via [ntfy.sh](https://ntfy.sh) or Telegram if any of the conditions are true.
 
 ## Features
