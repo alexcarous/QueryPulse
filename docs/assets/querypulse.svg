@@ -2,12 +2,8 @@
   <defs><linearGradient id="bg" x2="1" y2="1"><stop stop-color="#10232c"/><stop offset="1" stop-color="#1e3d49"/></linearGradient></defs>
   <rect width="640" height="360" fill="url(#bg)"/>
   <circle cx="485" cy="65" r="130" fill="#38bdf8" opacity=".06"/>
-  <g fill="none" stroke="#d6eaf1" stroke-width="5" stroke-linecap="round"><circle cx="170" cy="128" r="43"/><path d="m201 160 29 29"/></g>
-  <path d="M155 128h30m-15-15v30" fill="none" stroke="#38bdf8" stroke-width="4" stroke-linecap="round"/>
-  <path d="M263 143h43m-12-12 12 12-12 12" fill="none" stroke="#38bdf8" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
-  <rect x="337" y="78" width="184" height="137" rx="13" fill="#0a171e" stroke="#607b85" stroke-width="2"/>
-  <g fill="#607b85"><circle cx="353" cy="93" r="3"/><circle cx="365" cy="93" r="3"/><circle cx="377" cy="93" r="3"/></g>
-  <path d="M354 153h32l12-22 18 47 18-70 17 45h51" fill="none" stroke="#38bdf8" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <g transform="translate(-2055 -145) scale(5)">
   <path d="M461 63h28m-23-5v-8a9 9 0 0 1 18 0v8l5 5h-28l5-5m5 11a5 5 0 0 0 8 0" fill="none" stroke="#d6eaf1" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
   <text x="320" y="317" fill="#e6f3f7" text-anchor="middle" font-family="ui-monospace,monospace" font-size="30" letter-spacing="1">QueryPulse</text>
 </svg>
